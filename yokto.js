@@ -94,7 +94,10 @@ const yokto = {
     }
 };
 
-// Alias for requestAnimationFrame, static cache size
+/* Aliases */
+const $d = document;
+const $w = window;
+const $l = $d.location;
 const n = (window.requestAnimationFrame || (fn => setTimeout(fn, 16))).bind(window);
 
 // LRU Cache for $ selections (selector -> WeakRef(nodes array))
@@ -793,12 +796,20 @@ const $h = (route, callback) => {
     }
 };
 
-/* Aliases */
-const $d = document;
-const $w = window;
+/**
+ * Hash-based location redirector, redirects to route (using client-only hash location)
+ * @param string: route to redirect to
+ */
+const $a = route => {
+    const ec = '/'.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^[${ec}]+|[${ec}]+$`, 'g');
+    route = route.replace(re, '');
+    if ( ! route.startsWith('/') ) { route = '/' + route };
+    $l.hash = route
+}
 
 /* Exports */
-yokto.$, yokto.$$, yokto.__, yokto._$, yokto._, yokto.$_, yokto.$s, yokto.$c, yokto.$t, yokto.$h, yokto.$d, yokto.$w = $, $$, __, _$, _, $_, $s, $c, $t, $h, $d, $w;
+yokto.$, yokto.$$, yokto.__, yokto._$, yokto._, yokto.$_, yokto.$s, yokto.$c, yokto.$t, yokto.$h, yokto.$d, yokto.$w, yokto.$l, yokto.$a = $, $$, __, _$, _, $_, $s, $c, $t, $h, $d, $w, $l, $a;
 yokto.RESTClient = RESTClient;
 yokto.WSClient = WSClient;
 yokto.GraphQLClient = GraphQLClient;

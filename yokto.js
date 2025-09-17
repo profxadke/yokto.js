@@ -14,9 +14,10 @@
  *   - Chained DOM selector, and updater: $c
  *
  * API:
- *   $(selector, return_list) -> Selects elements
+ *   $(selector, return_list, useCache) -> Selects elements
  *     - returns single element if only one match or return_list == false
  *     - returns array of elements if multiple matches and return_list == true
+ *     - useCache: if true, caches/reuses selection
  *
  *   __(obj) -> Checks if obj is an array-like object (helper)
  *
@@ -33,45 +34,65 @@
  *     - index: number (optional, target only one element)
  *     - If `options` is a string or array, defaults to addClasses
  *
- *   $c(query) -> Chained version of $ and $_ combined.
+ *   $c(query) -> Chained version of $ and $_ combined
  *
- *   $s(query, Styles{}, index) -> Inline CSS/Style setter
+ *   $s(query, styles, index) -> Inline CSS/Style setter
  *
  *   RESTClient() -> HTTP REST Client
  *
- *   GraphQLClient() -> GraphQ Client
+ *   GraphQLClient() -> GraphQL Client
  *
  *   WSClient() -> WebSocket Client
  *
+ *   clearCache() -> Clears cached DOM selections
+ *
  */
 
+// Cache for $ selections (selector -> WeakRef(nodes array))
+const _$ = new Map();
 
 /**
  * Select elements from DOM.
  * @param {string} query - CSS selector string
  * @param {boolean} [return_list=false] - if true, return all matching elements as array
- * @returns {Element|Element[]} - a single Element or array of Elements
+ * @param {boolean} [useCache=false] - if true, use/cache the selection for reuse
+ * @returns {Element|Element[]|null} - a single Element, array of Elements, or null if no matches
  */
-const $ = (query, return_list) => {
-    const elems = document.querySelectorAll(query);
-    if (elems.length === 1 && !return_list) {
-        return elems[0];
+const $ = (query, return_list = false, useCache = false) => {
+    if (useCache && _$.has(query)) {
+        const cachedRef = _$.get(query);
+        const cached = cachedRef.deref();
+        if (cached) {
+            if (cached.length === 1 && !return_list) {
+                return cached[0];
+            }
+            return cached;
+        }
+        // Clean stale WeakRef
+        _$.delete(query);
     }
-    return Array.prototype.slice.call(elems);
+    const elems = document.querySelectorAll(query);
+    if (elems.length === 0 && !return_list) {
+        return null; // Prevent undefined errors
+    }
+    const nodes = Array.prototype.slice.call(elems);
+    if (useCache) {
+        _$.set(query, new WeakRef(nodes));
+    }
+    if (elems.length === 1 && !return_list) {
+        return nodes[0];
+    }
+    return nodes;
 };
 
-
 /**
- * Check if object is array-like (close to an Array) and if it's empty.
+ * Check if object is array-like (close to an Array) and isn't empty.
  * @param {any} obj
  * @returns {boolean} true if object is array-like and isn't empty.
  */
 const __ = (obj) => {
-    if (typeof obj === "object" && obj.length) {
-        return true;
-    } return false;
+    return typeof obj === "object" && obj && obj.length > 0;
 };
-
 
 /**
  * Check if object is an associative Array (dict from py)
@@ -80,8 +101,7 @@ const __ = (obj) => {
  */
 const ___ = obj => {
     return obj !== null && typeof obj === 'object' && !Array.isArray(obj);
-}
-
+};
 
 /**
  * Create and append a new element inside parent element.
@@ -91,12 +111,16 @@ const ___ = obj => {
  * @param {string} [innerText] - optional inner text content
  */
 const _ = (parentSelector, tag, attrs, innerText) => {
-    var parentElem = $(parentSelector);
-    if (typeof parentElem === 'undefined') { throw new Error("Parent Node/Element Doesn't Exist."); }
+    const parentElem = $(parentSelector);
+    if (!parentElem) {
+        throw new Error(`Parent Node/Element Doesn't Exist for selector: ${parentSelector}`);
+    }
     let elem = document.createElement(tag);
-    if (!(__(typeof attrs))) {
-        for (key in attrs) {
-            elem.setAttribute(key, attrs[key]);
+    if (___(attrs)) {
+        for (let key in attrs) {
+            if (Object.prototype.hasOwnProperty.call(attrs, key)) {
+                elem.setAttribute(key, attrs[key]);
+            }
         }
     }
     if (innerText && typeof innerText === 'string') {
@@ -104,7 +128,6 @@ const _ = (parentSelector, tag, attrs, innerText) => {
     }
     parentElem.appendChild(elem);
 };
-
 
 /**
  * Run a function when DOM is ready.
@@ -126,7 +149,6 @@ const $$ = (fn) => {
     }
 };
 
-
 /**
  * Universal DOM element updater
  * @param {string} query - CSS selector
@@ -146,7 +168,7 @@ const $_ = (query, options = {}) => {
     }
 
     let nodes = $(query, true);
-    if (!nodes.length) return;
+    if (!nodes || !nodes.length) return;
 
     if (!Array.isArray(nodes)) nodes = [nodes];
     if (typeof options.index === "number") {
@@ -154,9 +176,10 @@ const $_ = (query, options = {}) => {
     }
 
     nodes.forEach(el => {
+        if (!el) return; // Prevent errors on undefined elements
         // Add classes
         if (options.addClasses) {
-	    if (!typeof options.addClasses === 'string' || !Array.isArray(options.addClasses) { return }
+            if (typeof options.addClasses !== 'string' && !Array.isArray(options.addClasses)) return;
             const clsArr = Array.isArray(options.addClasses)
                 ? options.addClasses
                 : String(options.addClasses).split(/\s+/).filter(Boolean);
@@ -165,7 +188,7 @@ const $_ = (query, options = {}) => {
 
         // Remove classes
         if (options.removeClasses) {
-	    if (!typeof options.addClasses === 'string' || !Array.isArray(options.removeClasses) { return }
+            if (typeof options.removeClasses !== 'string' && !Array.isArray(options.removeClasses)) return;
             const clsArr = Array.isArray(options.removeClasses)
                 ? options.removeClasses
                 : String(options.removeClasses).split(/\s+/).filter(Boolean);
@@ -174,7 +197,7 @@ const $_ = (query, options = {}) => {
 
         // Toggle classes
         if (options.toggleClasses) {
-	    if (!typeof options.toggleClasses === 'string' || !Array.isArray(options.toggleClasses) { return }
+            if (typeof options.toggleClasses !== 'string' && !Array.isArray(options.toggleClasses)) return;
             const clsArr = Array.isArray(options.toggleClasses)
                 ? options.toggleClasses
                 : String(options.toggleClasses).split(/\s+/).filter(Boolean);
@@ -182,8 +205,7 @@ const $_ = (query, options = {}) => {
         }
 
         // Set attributes
-        if (options.setAttrs) {
-	    if ( ___(options.setAttrs ) { return }
+        if (options.setAttrs && ___(options.setAttrs)) {
             for (const [k, v] of Object.entries(options.setAttrs)) {
                 el.setAttribute(k, v);
             }
@@ -191,7 +213,7 @@ const $_ = (query, options = {}) => {
 
         // Remove attributes
         if (options.removeAttrs) {
-	    if (!typeof options.removeAttrs === 'string' || !Array.isArray(options.removeAttrs) { return }
+            if (typeof options.removeAttrs !== 'string' && !Array.isArray(options.removeAttrs)) return;
             const attrArr = Array.isArray(options.removeAttrs)
                 ? options.removeAttrs
                 : [options.removeAttrs];
@@ -199,7 +221,6 @@ const $_ = (query, options = {}) => {
         }
     });
 };
-
 
 /**
  * Inline style setter
@@ -209,7 +230,7 @@ const $_ = (query, options = {}) => {
  */
 const $s = (query, styles, index) => {
     let nodes = $(query, true);
-    if (!nodes.length) return;
+    if (!nodes || !nodes.length) return;
 
     if (!Array.isArray(nodes)) nodes = [nodes];
     if (typeof index === "number") {
@@ -217,21 +238,19 @@ const $s = (query, styles, index) => {
     }
 
     nodes.forEach(el => {
+        if (!el) return; // Prevent errors on undefined elements
         if (typeof styles === "string") {
             // parse "prop: value"
             let [prop, val] = styles.split(":").map(s => s.trim());
             if (prop && val) el.style[prop] = val;
-        } else {
-            // apply multiple styles, if associative array/dict
-	    if (___(styles)) {
-              for (const [prop, val] of Object.entries(styles)) {
-                  el.style[prop] = val;
-              }
-	    }
+        } else if (___(styles)) {
+            // apply multiple styles, if associative array
+            for (const [prop, val] of Object.entries(styles)) {
+                el.style[prop] = val;
+            }
         }
     });
 };
-
 
 /* ---------- Logger ---------- */
 const Logger = (opts = {}) => {
@@ -254,7 +273,6 @@ const Logger = (opts = {}) => {
 
 const defaultLogger = Logger({ verbose: false, prefix: "yokto" });
 
-
 /**
  * REST API client
  * ------------------------
@@ -267,8 +285,8 @@ const defaultLogger = Logger({ verbose: false, prefix: "yokto" });
  * @param {boolean} [options.raw=false] - return raw Response instead of JSON
  * @param {integer} [options.retry=0] - times to retry the request on failure
  * @param {number} [options.timeout=0] - timeout for the REST HTTP Client
- * @param {boolean} [options.verbose=false] - verbosoty of the REST HTTP Client
- * @returns {Promise<object|Response>} - JSON response, raw Response or raised Err (based on option and execution afterwards)
+ * @param {boolean} [options.verbose=false] - verbosity of the REST HTTP Client
+ * @returns {Promise<object|Response>} - JSON response, raw Response or raised Err
  */
 const RESTClient = async (method, url, options = {}) => {
     const {
@@ -282,7 +300,7 @@ const RESTClient = async (method, url, options = {}) => {
     };
 
     let fullUrl = url;
-    if (params && typeof params === "object") {
+    if (params && ___(params)) {
         const queryString = new URLSearchParams(params).toString();
         fullUrl += (url.includes("?") ? "&" : "?") + queryString;
     }
@@ -291,17 +309,23 @@ const RESTClient = async (method, url, options = {}) => {
         const fetchOptions = {
             method,
             headers: { ...headers },
-            body: data ? JSON.stringify(data) : undefined,
+            body: data ? (() => {
+                try {
+                    return JSON.stringify(data);
+                } catch (err) {
+                    log("error", "RESTClient: Failed to serialize body", err);
+                    throw new Error("Invalid JSON data");
+                }
+            })() : undefined,
             signal
         };
         if (data && !fetchOptions.headers["Content-Type"]) {
             fetchOptions.headers["Content-Type"] = "application/json";
         }
-        if (verbose) log("info", "REST request", { method, fullUrl, headers: fetchOptions.headers, body: data });
+        if (verbose) log("info", "REST request", { method, fullUrl, headers: fetchOptions.headers });
         return fetch(fullUrl, fetchOptions);
     };
 
-    // normalize retry config
     let maxAttempts = typeof retry === "number" ? retry + 1 : (retry?.attempts || 1);
     const baseDelay = retry?.delay || 300;
     const factor = retry?.factor || 1;
@@ -322,7 +346,7 @@ const RESTClient = async (method, url, options = {}) => {
             return raw ? resp : await resp.json();
         } catch (err) {
             lastErr = err;
-	    if (err.name === 'AbortError') throw new Error('Timeout');
+            if (err.name === 'AbortError') throw new Error('Timeout');
             log("warn", `REST attempt ${attempt} failed:`, err.message || err);
             if (attempt < maxAttempts) {
                 const wait = baseDelay * Math.pow(factor, attempt - 1);
@@ -336,7 +360,6 @@ const RESTClient = async (method, url, options = {}) => {
     log("error", "REST final failure", lastErr);
     throw lastErr;
 };
-
 
 /**
  * GraphQL client
@@ -358,7 +381,6 @@ const GraphQLClient = (url, { query, variables, ...opts }) => {
     });
 };
 
-
 /**
  * WebSocket wrapper
  * -----------------
@@ -368,11 +390,11 @@ const GraphQLClient = (url, { query, variables, ...opts }) => {
  * @param {function} [options.onClose] - called on connection close
  * @param {function} [options.onMessage] - called on incoming message
  * @param {function} [options.onError] - called on error
- * @param {boolean}  [options.verbose] - enable verbose logging, default=false
- * @param {boolean}  [options.autoReconnect=true] - auto reconnect on close/error
- * @param {number}   [options.reconnectRetries=5] - max reconnect attempts
- * @param {number}   [options.reconnectDelay=1000] - base delay ms (exponential)
- * @param {number}   [options.connectTimeout=5000] - timeout for initial connect
+ * @param {boolean} [options.verbose] - enable verbose logging, default=false
+ * @param {boolean} [options.autoReconnect=true] - auto reconnect on close/error
+ * @param {number} [options.reconnectRetries=5] - max reconnect attempts
+ * @param {number} [options.reconnectDelay=1000] - base delay ms (exponential)
+ * @param {number} [options.connectTimeout=5000] - timeout for initial connect
  * @returns {WebSocket} - WebSocket instance with sendMessage and reconnect methods
  */
 const WSClient = (url, options = {}) => {
@@ -446,7 +468,11 @@ const WSClient = (url, options = {}) => {
 
     ws.sendMessage = (data) => {
         if (ws.readyState === WebSocket.OPEN) {
-            ws.send(typeof data === "string" ? data : JSON.stringify(data));
+            try {
+                ws.send(typeof data === "string" ? data : JSON.stringify(data));
+            } catch (err) {
+                log("error", "WS sendMessage: Failed to serialize data", err);
+            }
         } else {
             log("warn", "WS sendMessage: socket not open");
         }
@@ -467,43 +493,121 @@ const WSClient = (url, options = {}) => {
     return ws;
 };
 
-
 /* ---------- $c: Chainable DOM helper built on top of $ and $_ ---------- */
 const $c = (selector, index) => {
     let nodes = $(selector, true);
-    if (!nodes.length) nodes = [];
+    if (!nodes || !nodes.length) nodes = [];
     if (!Array.isArray(nodes)) nodes = [nodes];
     if (typeof index === "number") nodes = [nodes[index]].filter(Boolean);
 
     const api = {
-        // Delegate directly to $_ for class/attr operations
-        addClass: cls => { $_(selector, { addClasses: cls, index }); return api; },
-        removeClass: cls => { $_(selector, { removeClasses: cls, index }); return api; },
-        toggleClass: cls => { $_(selector, { toggleClasses: cls, index }); return api; },
-        attr: (key, val) => {
-            if (val === undefined) {
-                $_(selector, { removeAttrs: key, index });
-            } else {
-                $_(selector, { setAttrs: { [key]: val }, index });
-            }
+        // Operate directly on cached nodes
+        addClass: cls => {
+            nodes.forEach(el => {
+                if (!el) return;
+                const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
+                el.classList.add(...clsArr);
+            });
             return api;
         },
-        css: (styles) => { $s(selector, styles, index); return api; },
+        removeClass: cls => {
+            nodes.forEach(el => {
+                if (!el) return;
+                const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
+                el.classList.remove(...clsArr);
+            });
+            return api;
+        },
+        toggleClass: cls => {
+            nodes.forEach(el => {
+                if (!el) return;
+                const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
+                clsArr.forEach(c => el.classList.toggle(c));
+            });
+            return api;
+        },
+        attr: (key, val) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                if (val === undefined) {
+                    el.removeAttribute(key);
+                } else {
+                    el.setAttribute(key, val);
+                }
+            });
+            return api;
+        },
+        css: (styles) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                if (typeof styles === "string") {
+                    let [prop, val] = styles.split(":").map(s => s.trim());
+                    if (prop && val) el.style[prop] = val;
+                } else if (___(styles)) {
+                    for (const [prop, val] of Object.entries(styles)) {
+                        el.style[prop] = val;
+                    }
+                }
+            });
+            return api;
+        },
 
         // Direct element content
-        html: (content) => { nodes.forEach(el => el.innerHTML = content); return api; },
-        text: (content) => { nodes.forEach(el => el.textContent = content); return api; },
+        html: (content) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.innerHTML = content;
+            });
+            return api;
+        },
+        text: (content) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.textContent = content;
+            });
+            return api;
+        },
 
         // Event handling
-        on: (evt, fn) => { nodes.forEach(el => el.addEventListener(evt, fn)); return api; },
-        off: (evt, fn) => { nodes.forEach(el => el.removeEventListener(evt, fn)); return api; },
+        on: (evt, fn) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.addEventListener(evt, fn);
+            });
+            return api;
+        },
+        off: (evt, fn) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.removeEventListener(evt, fn);
+            });
+            return api;
+        },
 
         // DOM insertion
-        append: (child) => { nodes.forEach(el => el.append(child.cloneNode(true))); return api; },
-        prepend: (child) => { nodes.forEach(el => el.prepend(child.cloneNode(true))); return api; },
+        append: (child) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.append(child.cloneNode(true));
+            });
+            return api;
+        },
+        prepend: (child) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.prepend(child.cloneNode(true));
+            });
+            return api;
+        },
 
         // Iteration helpers
-        each: (fn) => { nodes.forEach((el, i) => fn(el, i)); return api; },
+        each: (fn) => {
+            nodes.forEach((el, i) => {
+                if (!el) return;
+                fn(el, i);
+            });
+            return api;
+        },
         map: (fn) => $c(nodes.map((el, i) => fn(el, i)).filter(Boolean)),
         filter: (fn) => $c(nodes.filter((el, i) => fn(el, i))),
 
@@ -514,20 +618,18 @@ const $c = (selector, index) => {
     return api;
 };
 
-
 /* Alias */
 $r = RESTClient;
 $g = GraphQLClient;
 $w = WSClient;
 $l = Logger;
 
-
 /* ---------- Export ---------- */
 const yokto = {
     $, $$, _, $_, $s, $c, $r, $w, $g, $l,
     RESTClient, WSClient, GraphQLClient,
-    Logger, defaultLogger
+    Logger, defaultLogger,
+    clearCache: () => _$.clear() // Method to clear cache
 };
-
 
 if (typeof window !== "undefined") window.yokto = yokto;

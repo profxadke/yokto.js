@@ -14,6 +14,7 @@
  *   - Chained DOM selector and updater: $c
  *   - Element creation: $t
  *   - Hash router: $h
+ *   - PWA Helper: $p
  *
  * ALIAS: $d: document object, $w: window object, $l: location
  *
@@ -810,6 +811,106 @@ const $a = route => {
     if ( ! route.startsWith('/') ) { route = '/' + route };
     $l.hash = route
 }
+
+/**
+ * PWA helper
+ * @param {object} options - {
+ *   swPath: string,
+ *   resources: string[],
+ *   manifest: object,
+ *   onInstallPrompt: Function,
+ *   onServiceWorkerState: Function
+ * }
+ * @returns {object} - { promptInstall, updateServiceWorker }
+ */
+const $p = (options = {}) => {
+    const {
+        swPath = '/sw.js',
+        resources = ['/', '/index.html', '/styles.css', '/main.js', 'https://cdn.jsdelivr.net/gh/profxadke/yokto.js@main/yokto.min.js'],
+        manifest = {
+            name: 'Yokto App',
+            short_name: 'Yokto',
+            start_url: '/',
+            display: 'standalone',
+            background_color: '#ffffff',
+            theme_color: '#000000',
+            icons: [
+                {
+                    src: '/icon.png',
+                    sizes: '192x192',
+                    type: 'image/png'
+                }
+            ]
+        },
+        onInstallPrompt,
+        onServiceWorkerState,
+        logger = yokto.defaultLogger
+    } = options;
+
+    const log = (lvl, ...args) => logger[lvl](...args);
+    let deferredPrompt;
+
+    // Inject manifest
+    const manifestJson = JSON.stringify(manifest);
+    const blob = new Blob([manifestJson], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    yokto._('head', 'link', { rel: 'manifest', href: url });
+
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register(swPath).then(reg => {
+            log('info', 'Service Worker registered', { scope: reg.scope });
+            onServiceWorkerState?.('registered', reg);
+
+            reg.addEventListener('updatefound', () => {
+                const newWorker = reg.installing;
+                log('info', 'Service Worker update found');
+                newWorker.addEventListener('statechange', () => {
+                    log('info', `Service Worker state: ${newWorker.state}`);
+                    onServiceWorkerState?.(newWorker.state, reg);
+                });
+            });
+        }).catch(err => {
+            log('error', 'Service Worker registration failed', err);
+        });
+    }
+
+    // Handle install prompt
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        log('info', 'Install prompt available');
+        onInstallPrompt?.(e);
+    });
+
+    window.addEventListener('appinstalled', () => {
+        log('info', 'PWA installed');
+    });
+
+    return {
+        promptInstall: () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then(choice => {
+                    log('info', `Install prompt outcome: ${choice.outcome}`);
+                    deferredPrompt = null;
+                });
+            } else {
+                log('warn', 'No install prompt available');
+            }
+        },
+        updateServiceWorker: () => {
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistration().then(reg => {
+                    if (reg) {
+                        reg.update();
+                        log('info', 'Service Worker update triggered');
+                    }
+                });
+            }
+        }
+    };
+};
 
 /* Exports */
 yokto.$, yokto.$$, yokto.__, yokto._$, yokto._, yokto.$_, yokto.$s, yokto.$c, yokto.$t, yokto.$h, yokto.$d, yokto.$w, yokto.$l, yokto.$a = $, $$, __, _$, _, $_, $s, $c, $t, $h, $d, $w, $l, $a;

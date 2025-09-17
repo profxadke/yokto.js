@@ -1,31 +1,38 @@
 /**
  * yokto.js - A micro DOM utility/minimal DOM/HTTP helper library + DOM updater
  * --------------------------------------------
- * Provides ultra lightweight utilities for DOM selection, manipulation, element creation, traversal
- * DOM ready callbacks, and AJAX (fetch).
+ * Provides ultra lightweight utilities for DOM selection, manipulation, element creation, traversal,
+ * DOM ready callbacks, AJAX (fetch), and hash-based routing.
  *   - DOM selection: $
- *   - Helpers: __, Logger
- *   - Element creation: _
+ *   - Helpers: __, _$, Logger
+ *   - Create element and append function: _
  *   - DOM ready: $$
  *   - DOM updater: $_
  *   - HTTP Clients: RESTClient, GraphQLClient
  *   - WebSocket Client: WSClient
  *   - Inline style helper: $s
- *   - Chained DOM selector, and updater: $c
- *
- * ALIAS: $r -> RESTClient, $w -> WSClient, $g -> GraphQLClient, $l -> Logger
+ *   - Chained DOM selector and updater: $c
+ *   - Element creation: $t
+ *   - Hash router: $h
  *
  * API:
- *   $(selector, return_list, useCache) -> Selects elements
+ *   __(obj) -> Checks if obj is an associative array (dict in Python)
+ *
+ *   _(parentSelector, tag, attrs, innerText) -> Creates and appends element on parent element selected via querySelector
+ *
+ *   $$(fn) -> Executes fn when DOM is ready
+ *
+ *   _$ -> Holds DOM Query Selection Cache
+ *     - get: Get's DOM Element from (if in) Cache
+ *     - set: Set to Cache a DOM element mapped with its querySelector
+ *     - delete: Delete the Cached DOM element mapped to querySelector
+ *     - clear: clear DOM element cache
+ *
+ *   $(selector, return_list, useCache, scope) -> Selects elements
  *     - returns single element if only one match or return_list == false
  *     - returns array of elements if multiple matches and return_list == true
  *     - useCache: if true, caches/reuses selection
- *
- *   __(obj) -> Checks if obj is an associative array object, dict in py (helper)
- *
- *   _(parentSelector, tag, attrs, innerText) -> Creates and appends element
- *
- *   $$(fn) -> Executes fn when DOM is ready
+ *     - scope: optional DOM element to scope query (defaults to document)
  *
  *   $_(query, options|string|array) -> Universal DOM updater
  *     - addClasses: string|array
@@ -36,9 +43,33 @@
  *     - index: number (optional, target only one element)
  *     - If `options` is a string or array, defaults to addClasses
  *
- *   $c(query) -> Chained version of $ and $_ combined
- *
  *   $s(query, styles, index) -> Inline CSS/Style setter
+ *
+ *   $c(query, index) -> Chained version of $ and $_ combined
+ *     - addClass, removeClass, toggleClass
+ *     - attr: string|array|object  - if string/array it removes attrs, but key-value pair sets the attribute
+ *     - css: string
+ *     - html: string
+ *     - text: string
+ *     - on: event, function
+ *     - off: event, function
+ *     - prepend: child|node
+ *     - append: child|node
+ *     - each: function
+ *     - map: function
+ *     - filter: function
+ *     - get: returns nodes
+ *     - first: returns first node
+ *     - refresh: refreshes dom element
+ *
+ *   $t(tag, attrs, innerText) -> Returns a DOM ready html-node object
+ *     - tag: string ( name of tag, e.g., div, h1, etc. )
+ *     - attrs: object ( key: value pair of attributes for the tag )
+ *     - innerText: string ( optional, innerText if any for the tag )
+ *
+ *   $h(route, callback) -> Registers hash-based route with callback
+ *     - route: string (e.g., '/path', '/user/:id') or callback for default route
+ *     - callback: function({ path, params, query })
  *
  *   RESTClient() -> HTTP REST Client
  *
@@ -48,51 +79,63 @@
  *
  *   clearCache() -> Clears cached DOM selections
  *
- *   _$ -> Holds DOM Query Selection Cache
+ *   config{} -> Configuration object { observeDOM: boolean, MAX_CACHE_SIZE: integer }
  *
  *   TAG: <script src="https://cdn.jsdelivr.net/gh/profxadke/yokto.js@main/yokto.min.js"></script>
  */
 
+// Configuration
+const yokto = {
+    config: {
+        observeDOM: true, // Enable MutationObserver by default
+        MAX_CACHE_SIZE: 100
+    }
+};
+
 // Alias for requestAnimationFrame, static cache size
-const DEFAULT_MAX_CACHE_SIZE = 100;
 const n = (window.requestAnimationFrame || (fn => setTimeout(fn, 16))).bind(window);
 
 // LRU Cache for $ selections (selector -> WeakRef(nodes array))
 class LRUCache {
-  constructor(max = 100) {
-    this.max = max;
-    this.cache = new Map();
-  }
-  get(key) {
-    if (!this.cache.has(key)) return undefined;
-    const value = this.cache.get(key);
-    this.cache.delete(key);
-    this.cache.set(key, value);
-    return value;
-  }
-  set(key, value) {
-    if (this.cache.has(key)) this.cache.delete(key);
-    this.cache.set(key, value);
-    if (this.cache.size > this.max) {
-      this.cache.delete(this.cache.keys().next().value);
+    constructor(max = 100) {
+        this.max = max;
+        this.cache = new Map();
     }
-  }
-  delete(key) {
-    this.cache.delete(key);
-  }
-  clear() {
-    this.cache.clear();
-  }
+    get(key) {
+        if (!this.cache.has(key)) return undefined;
+        const value = this.cache.get(key);
+        this.cache.delete(key);
+        this.cache.set(key, value);
+        return value;
+    }
+    set(key, value) {
+        if (this.cache.has(key)) this.cache.delete(key);
+        this.cache.set(key, value);
+        if (this.cache.size > this.max) {
+            this.cache.delete(this.cache.keys().next().value);
+        }
+    }
+    delete(key) {
+        this.cache.delete(key);
+    }
+    clear() {
+        this.cache.clear();
+    }
 }
-const _$ = new LRUCache(DEFAULT_MAX_CACHE_SIZE || 100);
-const o = new MutationObserver(() => _$.clearCache());
-o.observe(document.body, { childList: true, subtree: true }); // TODO: Optionalize it.
+const _$ = new LRUCache(yokto.MAX_CACHE_SIZE || 100);
+
+// Optional MutationObserver for cache invalidation
+const o = new MutationObserver(() => _$.clear());
+if (yokto.config.observeDOM) {
+    o.observe(document.body, { childList: true, subtree: true });
+}
 
 /**
  * Select elements from DOM.
  * @param {string} query - CSS selector string
  * @param {boolean} [return_list=false] - if true, return all matching elements as array
  * @param {boolean} [useCache=false] - if true, use/cache the selection for reuse
+ * @param {Document|Element} [scope=document] - DOM element to scope query
  * @returns {Element|Element[]|null} - a single Element, array of Elements, or null if no matches
  */
 const $ = (query, return_list = false, useCache = false, scope = document) => {
@@ -110,16 +153,16 @@ const $ = (query, return_list = false, useCache = false, scope = document) => {
             _$.delete(query);
         }
     }
+    let elems;
     try {
-        const elems = scope.querySelectorAll(query);
+        elems = scope.querySelectorAll(query);
     } catch (err) {
         throw new Error(`Invalid CSS selector: ${query} or Scope: ${scope} doesn't contain querySelectorAll`);
     }
     if (elems.length === 0 && !return_list) {
         return null; // Prevent undefined errors
     }
-    const nodes = Array.prototype.slice.call(elems);
-    // IDK-WHEN-DOES-THE-DOM-CORRUPT-BUT-HERES-A-FIX: const nodes = Array.from(elems).filter(el => el instanceof Element);
+    const nodes = Array.from(elems).filter(el => el instanceof Element);
     if (useCache) {
         _$.set(query, new WeakRef(nodes));
     }
@@ -175,7 +218,7 @@ const removeAttrsFromEl = (el, attrs) => {
 const setStylesOnEl = (el, styles) => {
     if (typeof styles === "string") {
         const match = styles.match(/^([^:]+):\s*(.+)$/);
-        if ( match ) {
+        if (match) {
             const [, prop, val] = match;
             n(() => el.style[prop] = val);
         }
@@ -187,6 +230,27 @@ const setStylesOnEl = (el, styles) => {
         });
     }
 };
+
+
+/**
+ * Create and returns a newly DOM-ready element
+ * @param {string} tag - tag name of element/node to be returned
+ * @param {object} [attrs] - attributs as key: value pair
+ * @param {string} [innerText] - optional inner text content
+ */
+const $t = ( tag, attrs, innerText ) => {
+    let elem = document.createElement(tag);
+    if (__(attrs)) {
+        for (let key in attrs) {
+            if (Object.prototype.hasOwnProperty.call(attrs, key)) {
+                elem.setAttribute(key, attrs[key]);
+            }
+        }
+    }
+    if (innerText != null) {
+        elem.innerText = String(innerText);
+    }; return elem
+}
 
 /**
  * Create and append a new element inside parent element.
@@ -200,17 +264,7 @@ const _ = (parentSelector, tag, attrs, innerText) => {
     if (!parentElem) {
         throw new Error(`Parent Node/Element Doesn't Exist for selector: ${parentSelector}`);
     }
-    let elem = document.createElement(tag);
-    if (__(attrs)) {
-        for (let key in attrs) {
-            if (Object.prototype.hasOwnProperty.call(attrs, key)) {
-                elem.setAttribute(key, attrs[key]);
-            }
-        }
-    }
-    if (innerText != null) {
-        elem.innerText = String(innerText);
-    }
+    const elem = $t(tag, attrs, innerText);
     parentElem.appendChild(elem);
 };
 
@@ -297,146 +351,11 @@ const $s = (query, styles, index) => {
     });
 };
 
-/* ---------- $c: Chainable DOM helper built on top of $ and $_ ---------- */
-const $c = (selector, index) => {
-    let nodes = $(selector, true);
-    if (!nodes || !nodes.length) nodes = [];
-    if (!Array.isArray(nodes)) nodes = [nodes];
-    if (typeof index === "number") {
-        if (index < 0 || index >= nodes.length) {
-            throw new Error(`Invalid index ${index} for ${nodes.length} nodes`);
-        }
-        nodes = [nodes[index]].filter(Boolean);
-    }
-
-    const invalidateCache = () => {
-        if (_$.cache.has(selector)) _$.delete(selector);
-    };
-
-    const api = {
-        addClass: cls => {
-            nodes.forEach(el => {
-                if (!el) return;
-                addClassesToEl(el, cls);
-            });
-            return api;
-        },
-        removeClass: cls => {
-            nodes.forEach(el => {
-                if (!el) return;
-                removeClassesFromEl(el, cls);
-            });
-            return api;
-        },
-        toggleClass: cls => {
-            nodes.forEach(el => {
-                if (!el) return;
-                toggleClassesOnEl(el, cls);
-            });
-            return api;
-        },
-        attr: (key, val) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                if (val === undefined) {
-                    removeAttrsFromEl(el, key);
-                } else {
-                    setAttrsOnEl(el, { [key]: val });
-                }
-            });
-            return api;
-        },
-        css: (styles) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                setStylesOnEl(el, styles);
-            });
-            return api;
-        },
-
-        // Direct element content (mutations - invalidate cache)
-        html: (content) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                n(() => el.innerHTML = content);
-            });
-            invalidateCache();
-            return api;
-        },
-        text: (content) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                n(() => el.textContent = content);
-            });
-            invalidateCache();
-            return api;
-        },
-
-        // Event handling (no mutation)
-        on: (evt, fn) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                el.addEventListener(evt, fn);
-            });
-            return api;
-        },
-        off: (evt, fn) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                el.removeEventListener(evt, fn);
-            });
-            return api;
-        },
-
-        // DOM insertion (mutations - invalidate cache)
-        append: (child) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                n(() => el.append(child.cloneNode(true)));
-            });
-            invalidateCache();
-            return api;
-        },
-        prepend: (child) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                n(() => el.prepend(child.cloneNode(true)));
-            });
-            invalidateCache();
-            return api;
-        },
-
-        // Iteration helpers
-        each: (fn) => {
-            nodes.forEach((el, i) => {
-                if (!el) return;
-                fn(el, i);
-            });
-            return api;
-        },
-        map: (fn) => $c(nodes.map((el, i) => fn(el, i)).filter(Boolean)),
-        filter: (fn) => $c(nodes.filter((el, i) => fn(el, i))),
-
-        // Accessors
-        get: () => nodes,
-        first: () => nodes[0] || null,
-
-	// Refresh Element-QuerySelected
-	refresh: () => {
-            nodes = $(selector, true);
-            if (!nodes || !nodes.length) nodes = [];
-            if (!Array.isArray(nodes)) nodes = [nodes];
-            if (typeof index === "number") {
-                if (index < 0 || index >= nodes.length) throw new Error(`Invalid index ${index}`);
-                nodes = [nodes[index]].filter(Boolean);
-            }
-            return api;
-        }
-    };
-    return api;
-};
-
-/* ---------- Logger ---------- */
+/**
+ * Logger
+ * @param {object} [opts] - { verbose: boolean, prefix: string, level: string }
+ * @returns {object} - { error, warn, info, debug }
+ */
 const Logger = (opts = {}) => {
     const { verbose = false, prefix = "yokto", level = "info" } = opts;
     const levels = { error: 0, warn: 1, info: 2, debug: 3 };
@@ -459,18 +378,10 @@ const defaultLogger = Logger({ verbose: false, prefix: "yokto" });
 
 /**
  * REST API client
- * ------------------------
  * @param {string} method - HTTP method (GET, POST, PUT, DELETE)
  * @param {string} url - endpoint URL
- * @param {object} [options] - optional config
- * @param {object} [options.data] - JSON body for POST/PUT
- * @param {object} [options.params] - query parameters for GET
- * @param {object} [options.headers] - additional headers
- * @param {boolean} [options.raw=false] - return raw Response instead of JSON
- * @param {integer} [options.retry=0] - times to retry the request on failure
- * @param {number} [options.timeout=0] - timeout for the REST HTTP Client
- * @param {boolean} [options.verbose=false] - verbosity of the REST HTTP Client
- * @returns {Promise<object|Response>} - JSON response, raw Response or raised Err
+ * @param {object} [options] - { data, params, headers, raw, retry, timeout, verbose, logger }
+ * @returns {Promise<object|Response>} - JSON response, raw Response, or error
  */
 const RESTClient = async (method, url, options = {}) => {
     const {
@@ -553,13 +464,8 @@ const RESTClient = async (method, url, options = {}) => {
 
 /**
  * GraphQL client
- * --------------
  * @param {string} url - GraphQL endpoint
- * @param {object} options
- * @param {string} options.query - GraphQL query or mutation
- * @param {object} [options.variables] - variables for query
- * @param {object} [options.headers] - custom headers
- * @param {object} [options] - custom options for RESTClient
+ * @param {object} options - { query, variables, headers, ...rest }
  * @returns {Promise<object>} - parsed JSON response
  */
 const GraphQLClient = (url, { query, variables, ...opts }) => {
@@ -573,19 +479,8 @@ const GraphQLClient = (url, { query, variables, ...opts }) => {
 
 /**
  * WebSocket wrapper
- * -----------------
  * @param {string} url - WebSocket server URL
- * @param {object} [options]
- * @param {function} [options.onOpen] - called on connection open
- * @param {function} [options.onClose] - called on connection close
- * @param {function} [options.onMessage] - called on incoming message
- * @param {function} [options.onError] - called on error
- * @param {function} [options.onReconnectFail] - called after all reconnections failed
- * @param {boolean} [options.verbose] - enable verbose logging, default=false
- * @param {boolean} [options.autoReconnect=true] - auto reconnect on close/error
- * @param {number} [options.reconnectRetries=5] - max reconnect attempts
- * @param {number} [options.reconnectDelay=1000] - base delay ms (exponential)
- * @param {number} [options.connectTimeout=5000] - timeout for initial connect
+ * @param {object} [options] - { onOpen, onClose, onMessage, onError, onReconnectFail, protocols, verbose, autoReconnect, reconnectRetries, reconnectDelay, connectTimeout }
  * @returns {WebSocket} - WebSocket instance with sendMessage and reconnect methods
  */
 const WSClient = (url, options = {}) => {
@@ -627,7 +522,7 @@ const WSClient = (url, options = {}) => {
             }
         };
         ws.onmessage = e => {
-            if (verbose) log("debug", "WS message", e.data);
+            if (verbose) log("debug", "WS message", '[SANITIZED]');
             onMessage?.(e);
         };
         ws.onerror = e => {
@@ -650,7 +545,7 @@ const WSClient = (url, options = {}) => {
                 log("warn", `WS initial connect failed, retry ${retryCount} in ${delay}ms`, err);
                 setTimeout(init, delay);
             } else {
-		onReconnectFail?.(err);
+                onReconnectFail?.(err);
                 throw err;
             }
         }
@@ -685,18 +580,224 @@ const WSClient = (url, options = {}) => {
     return ws;
 };
 
-/* Alias */
-$r = RESTClient;
-$g = GraphQLClient;
-$w = WSClient;
-$l = Logger;
+/* ---------- $c: Chainable DOM helper built on top of $ and $_ ---------- */
+const $c = (selector, index) => {
+    let nodes = $(selector, true);
+    if (!nodes || !nodes.length) nodes = [];
+    if (!Array.isArray(nodes)) nodes = [nodes];
+    if (typeof index === "number") {
+        if (index < 0 || index >= nodes.length) {
+            throw new Error(`Invalid index ${index} for ${nodes.length} nodes`);
+        }
+        nodes = [nodes[index]].filter(Boolean);
+    }
 
-/* ---------- Export ---------- */
-const yokto = {
-    $, $$, __, _$, _, $_, $s, $c, $r, $w, $g, $l,
-    RESTClient, WSClient, GraphQLClient,
-    Logger, defaultLogger,
-    clearCache: () => _$.clear() // Method to clear cache
+    const invalidateCache = () => {
+        if (_$.cache.has(selector)) _$.delete(selector);
+    };
+
+    const api = {
+        addClass: cls => {
+            nodes.forEach(el => {
+                if (!el) return;
+                addClassesToEl(el, cls);
+            });
+            return api;
+        },
+        removeClass: cls => {
+            nodes.forEach(el => {
+                if (!el) return;
+                removeClassesFromEl(el, cls);
+            });
+            return api;
+        },
+        toggleClass: cls => {
+            nodes.forEach(el => {
+                if (!el) return;
+                toggleClassesOnEl(el, cls);
+            });
+            return api;
+        },
+        attr: (key, val) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                if (val === undefined) {
+                    removeAttrsFromEl(el, key);
+                } else {
+                    setAttrsOnEl(el, { [key]: val });
+                }
+            });
+            return api;
+        },
+        css: (styles) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                setStylesOnEl(el, styles);
+            });
+            return api;
+        },
+        html: (content) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                n(() => el.innerHTML = content);
+            });
+            invalidateCache();
+            return api;
+        },
+        text: (content) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                n(() => el.textContent = content);
+            });
+            invalidateCache();
+            return api;
+        },
+        on: (evt, fn) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.addEventListener(evt, fn);
+            });
+            return api;
+        },
+        off: (evt, fn) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.removeEventListener(evt, fn);
+            });
+            return api;
+        },
+        append: (child) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                n(() => el.append(child.cloneNode(true)));
+            });
+            invalidateCache();
+            return api;
+        },
+        prepend: (child) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                n(() => el.prepend(child.cloneNode(true)));
+            });
+            invalidateCache();
+            return api;
+        },
+        each: (fn) => {
+            nodes.forEach((el, i) => {
+                if (!el) return;
+                fn(el, i);
+            });
+            return api;
+        },
+        map: (fn) => $c(nodes.map((el, i) => fn(el, i)).filter(Boolean)),
+        filter: (fn) => $c(nodes.filter((el, i) => fn(el, i))),
+        get: () => nodes,
+        first: () => nodes[0] || null,
+        refresh: () => {
+            nodes = $(selector, true);
+            if (!nodes || !nodes.length) nodes = [];
+            if (!Array.isArray(nodes)) nodes = [nodes];
+            if (typeof index === "number") {
+                if (index < 0 || index >= nodes.length) throw new Error(`Invalid index ${index}`);
+                nodes = [nodes[index]].filter(Boolean);
+            }
+            return api;
+        }
+    };
+    return api;
 };
+
+/**
+ * Hash-based router
+ * @param {string|Function} route - Route path (e.g., '/path', '/user/:id') or default callback
+ * @param {Function} [callback] - Callback({ path, params, query }) for route match
+ */
+const $h = (route, callback) => {
+    const logger = yokto.defaultLogger;
+    const routes = $h.routes || ($h.routes = new Map());
+    const log = (lvl, ...args) => logger[lvl](...args);
+
+    // Register default route if route is a function
+    if (typeof route === 'function') {
+        $h.defaultRoute = route;
+        return;
+    }
+
+    // Validate route and callback
+    if (typeof route !== 'string' || typeof callback !== 'function') {
+        throw new Error('Invalid route or callback');
+    }
+
+    // Convert route to regex (e.g., '/user/:id' -> /^\/user\/([^\/]+)$/)
+    const paramNames = [];
+    const regexStr = route
+        .replace(/\/:([^\/]+)/g, (_, name) => {
+            paramNames.push(name);
+            return '/([^\/]+)';
+        })
+        .replace(/\//g, '\\/')
+        .replace(/\./g, '\\.')
+        .replace(/\*/g, '.*');
+    const regex = new RegExp(`^${regexStr}$`);
+
+    // Store route
+    routes.set(route, { regex, callback, paramNames });
+    log('info', `Registered route: ${route}`);
+
+    // Handle hash change
+    const handleHash = () => {
+        const hash = window.location.hash.replace(/^#/, '') || '/';
+        const [path, queryStr] = hash.split('?');
+        const query = {};
+        if (queryStr) {
+            new URLSearchParams(queryStr).forEach((value, key) => {
+                query[key] = value;
+            });
+        }
+
+        let matched = false;
+        for (const [route, { regex, callback, paramNames }] of routes) {
+            const match = path.match(regex);
+            if (match) {
+                const params = {};
+                paramNames.forEach((name, i) => {
+                    params[name] = match[i + 1];
+                });
+                n(() => {
+                    yokto.clearCache(); // Clear DOM cache on route change
+                    callback({ path, params, query });
+                });
+                log('debug', `Route matched: ${route}`, { path, params, query });
+                matched = true;
+                break;
+            }
+        }
+
+        if (!matched && $h.defaultRoute) {
+            n(() => {
+                yokto.clearCache(); // Clear DOM cache for default route
+                $h.defaultRoute({ path, params: {}, query });
+            });
+            log('debug', 'Default route triggered', { path, query });
+        }
+    };
+
+    // Initialize if not already done
+    if (!$h.initialized) {
+        window.addEventListener('hashchange', handleHash, { passive: true });
+        $$(handleHash); // Run on DOM ready
+        $h.initialized = true;
+        log('info', 'Hash router initialized');
+    }
+};
+
+/* Exports */
+yokto.$, yokto.$$, yokto.__, yokto._$, yokto._, yokto.$_, yokto.$s, yokto.$c, yokto.$t, yokto.$h = $, $$, __, _$, _, $_, $s, $c, $t, $h;
+yokto.RESTClient = RESTClient;
+yokto.WSClient = WSClient;
+yokto.GraphQLClient = GraphQLClient;
+yokto.Logger = Logger;
+yokto.defaultLogger = defaultLogger;
+yokto.clearCache = () => _$.clear();
 
 if (typeof window !== "undefined") window.yokto = yokto;

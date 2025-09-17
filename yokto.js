@@ -15,7 +15,7 @@
  *   - Element creation: $t
  *   - Hash router: $h
  *
- * ALIAS: $d: document object, $w: window object
+ * ALIAS: $d: document object, $w: window object, $l: location
  *
  * API:
  *   __(obj) -> Checks if obj is an associative array (dict in Python)
@@ -72,6 +72,9 @@
  *   $h(route, callback) -> Registers hash-based route with callback
  *     - route: string (e.g., '/path', '/user/:id') or callback for default route
  *     - callback: function({ path, params, query })
+ *
+ *   $a(route) -> Redirects / Teleports window.hash to provided route
+ *     - route: string  (e.g., <button onclick="$a('anotherPage')">Next Page</button>)
  *
  *   RESTClient() -> HTTP REST Client
  *

@@ -4,7 +4,7 @@
  * Provides ultra lightweight utilities for DOM selection, manipulation, element creation, traversal
  * DOM ready callbacks, and AJAX (fetch).
  *   - DOM selection: $
- *   - Helpers: __
+ *   - Helpers: __, ___, Logger
  *   - Element creation: _
  *   - DOM ready: $$
  *   - DOM updater: $_
@@ -13,6 +13,8 @@
  *   - Inline style helper: $s
  *   - Chained DOM selector, and updater: $c
  *
+ * ALIAS: $r -> RESTClient, $w -> WSClient, $g -> GraphQLClient, $l -> Logger
+ *
  * API:
  *   $(selector, return_list, useCache) -> Selects elements
  *     - returns single element if only one match or return_list == false
@@ -20,6 +22,8 @@
  *     - useCache: if true, caches/reuses selection
  *
  *   __(obj) -> Checks if obj is an array-like object (helper)
+ *
+ *   ___(obj) -> Checks if obj is an array is an associative array object, dict in py (helper)
  *
  *   _(parentSelector, tag, attrs, innerText) -> Creates and appends element
  *
@@ -48,8 +52,34 @@
  *
  */
 
-// Cache for $ selections (selector -> WeakRef(nodes array))
-const _$ = new Map();
+// LRU Cache for $ selections (selector -> WeakRef(nodes array))
+class LRUCache {
+  constructor(max = 100) {
+    this.max = max;
+    this.cache = new Map();
+  }
+  get(key) {
+    if (!this.cache.has(key)) return undefined;
+    const value = this.cache.get(key);
+    this.cache.delete(key);
+    this.cache.set(key, value);
+    return value;
+  }
+  set(key, value) {
+    if (this.cache.has(key)) this.cache.delete(key);
+    this.cache.set(key, value);
+    if (this.cache.size > this.max) {
+      this.cache.delete(this.cache.keys().next().value);
+    }
+  }
+  delete(key) {
+    this.cache.delete(key);
+  }
+  clear() {
+    this.cache.clear();
+  }
+}
+const _$ = new LRUCache();
 
 /**
  * Select elements from DOM.
@@ -59,17 +89,19 @@ const _$ = new Map();
  * @returns {Element|Element[]|null} - a single Element, array of Elements, or null if no matches
  */
 const $ = (query, return_list = false, useCache = false) => {
-    if (useCache && _$.has(query)) {
+    if (useCache) {
         const cachedRef = _$.get(query);
-        const cached = cachedRef.deref();
-        if (cached) {
-            if (cached.length === 1 && !return_list) {
-                return cached[0];
+        if (cachedRef) {
+            const cached = cachedRef.deref();
+            if (cached) {
+                if (cached.length === 1 && !return_list) {
+                    return cached[0];
+                }
+                return cached;
             }
-            return cached;
+            // Clean stale WeakRef
+            _$.delete(query);
         }
-        // Clean stale WeakRef
-        _$.delete(query);
     }
     const elems = document.querySelectorAll(query);
     if (elems.length === 0 && !return_list) {
@@ -86,12 +118,12 @@ const $ = (query, return_list = false, useCache = false) => {
 };
 
 /**
- * Check if object is array-like (close to an Array) and isn't empty.
+ * Check if object is array-like (close to an Array) and isn't empty - idk why here|legacy.
  * @param {any} obj
- * @returns {boolean} true if object is array-like and isn't empty.
+ * @returns {boolean} true if object is array-like (excluding empty array-like obj).
  */
 const __ = (obj) => {
-    return typeof obj === "object" && obj && obj.length > 0;
+    return obj != null && typeof obj === "object" && typeof obj.length > 0;
 };
 
 /**
@@ -103,12 +135,61 @@ const ___ = obj => {
     return obj !== null && typeof obj === 'object' && !Array.isArray(obj);
 };
 
+// Shared helpers for DRY (used by $_ and $c)
+const addClassesToEl = (el, cls) => {
+    if (typeof cls !== 'string' && !Array.isArray(cls)) return;
+    const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
+    requestAnimationFrame(() => el.classList.add(...clsArr));
+};
+
+const removeClassesFromEl = (el, cls) => {
+    if (typeof cls !== 'string' && !Array.isArray(cls)) return;
+    const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
+    requestAnimationFrame(() => el.classList.remove(...clsArr));
+};
+
+const toggleClassesOnEl = (el, cls) => {
+    if (typeof cls !== 'string' && !Array.isArray(cls)) return;
+    const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
+    requestAnimationFrame(() => clsArr.forEach(c => el.classList.toggle(c)));
+};
+
+const setAttrsOnEl = (el, attrs) => {
+    if (!___(attrs)) return;
+    requestAnimationFrame(() => {
+        for (const [k, v] of Object.entries(attrs)) {
+            el.setAttribute(k, v);
+        }
+    });
+};
+
+const removeAttrsFromEl = (el, attrs) => {
+    if (typeof attrs !== 'string' && !Array.isArray(attrs)) return;
+    const attrArr = Array.isArray(attrs) ? attrs : [attrs];
+    requestAnimationFrame(() => attrArr.forEach(attr => el.removeAttribute(attr)));
+};
+
+const setStylesOnEl = (el, styles) => {
+    if (typeof styles === "string") {
+        let [prop, val] = styles.split(":").map(s => s.trim());
+        if (prop && val) {
+            requestAnimationFrame(() => el.style[prop] = val);
+        }
+    } else if (___(styles)) {
+        requestAnimationFrame(() => {
+            for (const [prop, val] of Object.entries(styles)) {
+                el.style[prop] = val;
+            }
+        });
+    }
+};
+
 /**
  * Create and append a new element inside parent element.
  * @param {string} parentSelector - CSS selector of parent
  * @param {string} tag - tag name of element to create
  * @param {object} [attrs] - attributes as key:value
- * @param {string} [innerText] - optional inner text content
+ * @param {any} [innerText] - optional inner text content (coerced to string)
  */
 const _ = (parentSelector, tag, attrs, innerText) => {
     const parentElem = $(parentSelector);
@@ -123,8 +204,8 @@ const _ = (parentSelector, tag, attrs, innerText) => {
             }
         }
     }
-    if (innerText && typeof innerText === 'string') {
-        elem.innerText = innerText;
+    if (innerText != null) {
+        elem.innerText = String(innerText);
     }
     parentElem.appendChild(elem);
 };
@@ -172,53 +253,19 @@ const $_ = (query, options = {}) => {
 
     if (!Array.isArray(nodes)) nodes = [nodes];
     if (typeof options.index === "number") {
+        if (options.index < 0 || options.index >= nodes.length) {
+            throw new Error(`Invalid index ${options.index} for ${nodes.length} nodes`);
+        }
         nodes = [nodes[options.index]].filter(Boolean);
     }
 
     nodes.forEach(el => {
-        if (!el) return; // Prevent errors on undefined elements
-        // Add classes
-        if (options.addClasses) {
-            if (typeof options.addClasses !== 'string' && !Array.isArray(options.addClasses)) return;
-            const clsArr = Array.isArray(options.addClasses)
-                ? options.addClasses
-                : String(options.addClasses).split(/\s+/).filter(Boolean);
-            el.classList.add(...clsArr);
-        }
-
-        // Remove classes
-        if (options.removeClasses) {
-            if (typeof options.removeClasses !== 'string' && !Array.isArray(options.removeClasses)) return;
-            const clsArr = Array.isArray(options.removeClasses)
-                ? options.removeClasses
-                : String(options.removeClasses).split(/\s+/).filter(Boolean);
-            el.classList.remove(...clsArr);
-        }
-
-        // Toggle classes
-        if (options.toggleClasses) {
-            if (typeof options.toggleClasses !== 'string' && !Array.isArray(options.toggleClasses)) return;
-            const clsArr = Array.isArray(options.toggleClasses)
-                ? options.toggleClasses
-                : String(options.toggleClasses).split(/\s+/).filter(Boolean);
-            clsArr.forEach(cls => el.classList.toggle(cls));
-        }
-
-        // Set attributes
-        if (options.setAttrs && ___(options.setAttrs)) {
-            for (const [k, v] of Object.entries(options.setAttrs)) {
-                el.setAttribute(k, v);
-            }
-        }
-
-        // Remove attributes
-        if (options.removeAttrs) {
-            if (typeof options.removeAttrs !== 'string' && !Array.isArray(options.removeAttrs)) return;
-            const attrArr = Array.isArray(options.removeAttrs)
-                ? options.removeAttrs
-                : [options.removeAttrs];
-            attrArr.forEach(attr => el.removeAttribute(attr));
-        }
+        if (!el) return;
+        if (options.addClasses) addClassesToEl(el, options.addClasses);
+        if (options.removeClasses) removeClassesFromEl(el, options.removeClasses);
+        if (options.toggleClasses) toggleClassesOnEl(el, options.toggleClasses);
+        if (options.setAttrs) setAttrsOnEl(el, options.setAttrs);
+        if (options.removeAttrs) removeAttrsFromEl(el, options.removeAttrs);
     });
 };
 
@@ -234,21 +281,15 @@ const $s = (query, styles, index) => {
 
     if (!Array.isArray(nodes)) nodes = [nodes];
     if (typeof index === "number") {
+        if (index < 0 || index >= nodes.length) {
+            throw new Error(`Invalid index ${index} for ${nodes.length} nodes`);
+        }
         nodes = [nodes[index]].filter(Boolean);
     }
 
     nodes.forEach(el => {
-        if (!el) return; // Prevent errors on undefined elements
-        if (typeof styles === "string") {
-            // parse "prop: value"
-            let [prop, val] = styles.split(":").map(s => s.trim());
-            if (prop && val) el.style[prop] = val;
-        } else if (___(styles)) {
-            // apply multiple styles, if associative array
-            for (const [prop, val] of Object.entries(styles)) {
-                el.style[prop] = val;
-            }
-        }
+        if (!el) return;
+        setStylesOnEl(el, styles);
     });
 };
 
@@ -322,7 +363,13 @@ const RESTClient = async (method, url, options = {}) => {
         if (data && !fetchOptions.headers["Content-Type"]) {
             fetchOptions.headers["Content-Type"] = "application/json";
         }
-        if (verbose) log("info", "REST request", { method, fullUrl, headers: fetchOptions.headers });
+        if (verbose) {
+            const safeHeaders = { ...fetchOptions.headers };
+            ['Authorization', 'Cookie', 'Set-Cookie'].forEach(key => {
+                if (safeHeaders[key]) safeHeaders[key] = '[REDACTED]';
+            });
+            log("info", "REST request", { method, fullUrl, headers: safeHeaders, body: '[OMITTED for security]' });
+        }
         return fetch(fullUrl, fetchOptions);
     };
 
@@ -498,31 +545,36 @@ const $c = (selector, index) => {
     let nodes = $(selector, true);
     if (!nodes || !nodes.length) nodes = [];
     if (!Array.isArray(nodes)) nodes = [nodes];
-    if (typeof index === "number") nodes = [nodes[index]].filter(Boolean);
+    if (typeof index === "number") {
+        if (index < 0 || index >= nodes.length) {
+            throw new Error(`Invalid index ${index} for ${nodes.length} nodes`);
+        }
+        nodes = [nodes[index]].filter(Boolean);
+    }
+
+    const invalidateCache = () => {
+        if (_$.cache.has(selector)) _$.delete(selector);
+    };
 
     const api = {
-        // Operate directly on cached nodes
         addClass: cls => {
             nodes.forEach(el => {
                 if (!el) return;
-                const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-                el.classList.add(...clsArr);
+                addClassesToEl(el, cls);
             });
             return api;
         },
         removeClass: cls => {
             nodes.forEach(el => {
                 if (!el) return;
-                const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-                el.classList.remove(...clsArr);
+                removeClassesFromEl(el, cls);
             });
             return api;
         },
         toggleClass: cls => {
             nodes.forEach(el => {
                 if (!el) return;
-                const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-                clsArr.forEach(c => el.classList.toggle(c));
+                toggleClassesOnEl(el, cls);
             });
             return api;
         },
@@ -530,9 +582,9 @@ const $c = (selector, index) => {
             nodes.forEach(el => {
                 if (!el) return;
                 if (val === undefined) {
-                    el.removeAttribute(key);
+                    removeAttrsFromEl(el, key);
                 } else {
-                    el.setAttribute(key, val);
+                    setAttrsOnEl(el, { [key]: val });
                 }
             });
             return api;
@@ -540,35 +592,30 @@ const $c = (selector, index) => {
         css: (styles) => {
             nodes.forEach(el => {
                 if (!el) return;
-                if (typeof styles === "string") {
-                    let [prop, val] = styles.split(":").map(s => s.trim());
-                    if (prop && val) el.style[prop] = val;
-                } else if (___(styles)) {
-                    for (const [prop, val] of Object.entries(styles)) {
-                        el.style[prop] = val;
-                    }
-                }
+                setStylesOnEl(el, styles);
             });
             return api;
         },
 
-        // Direct element content
+        // Direct element content (mutations - invalidate cache)
         html: (content) => {
             nodes.forEach(el => {
                 if (!el) return;
-                el.innerHTML = content;
+                requestAnimationFrame(() => el.innerHTML = content);
             });
+            invalidateCache();
             return api;
         },
         text: (content) => {
             nodes.forEach(el => {
                 if (!el) return;
-                el.textContent = content;
+                requestAnimationFrame(() => el.textContent = content);
             });
+            invalidateCache();
             return api;
         },
 
-        // Event handling
+        // Event handling (no mutation)
         on: (evt, fn) => {
             nodes.forEach(el => {
                 if (!el) return;
@@ -584,19 +631,21 @@ const $c = (selector, index) => {
             return api;
         },
 
-        // DOM insertion
+        // DOM insertion (mutations - invalidate cache)
         append: (child) => {
             nodes.forEach(el => {
                 if (!el) return;
-                el.append(child.cloneNode(true));
+                requestAnimationFrame(() => el.append(child.cloneNode(true)));
             });
+            invalidateCache();
             return api;
         },
         prepend: (child) => {
             nodes.forEach(el => {
                 if (!el) return;
-                el.prepend(child.cloneNode(true));
+                requestAnimationFrame(() => el.prepend(child.cloneNode(true)));
             });
+            invalidateCache();
             return api;
         },
 

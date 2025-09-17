@@ -15,6 +15,8 @@
  *   - Element creation: $t
  *   - Hash router: $h
  *
+ * ALIAS: $d: document object, $w: window object
+ *
  * API:
  *   __(obj) -> Checks if obj is an associative array (dict in Python)
  *
@@ -791,8 +793,12 @@ const $h = (route, callback) => {
     }
 };
 
+/* Aliases */
+const $d = document;
+const $w = window;
+
 /* Exports */
-yokto.$, yokto.$$, yokto.__, yokto._$, yokto._, yokto.$_, yokto.$s, yokto.$c, yokto.$t, yokto.$h = $, $$, __, _$, _, $_, $s, $c, $t, $h;
+yokto.$, yokto.$$, yokto.__, yokto._$, yokto._, yokto.$_, yokto.$s, yokto.$c, yokto.$t, yokto.$h, yokto.$d, yokto.$w = $, $$, __, _$, _, $_, $s, $c, $t, $h, $d, $w;
 yokto.RESTClient = RESTClient;
 yokto.WSClient = WSClient;
 yokto.GraphQLClient = GraphQLClient;

@@ -50,6 +50,7 @@
  *
  *   _$ -> Holds DOM Query Selection Cache
  *
+ *   TAG: <script src="https://cdn.jsdelivr.net/gh/profxadke/yokto.js@main/yokto.min.js"></script>
  */
 
 // Alias for requestAnimationFrame
@@ -285,6 +286,133 @@ const $s = (query, styles, index) => {
         if (!el) return;
         setStylesOnEl(el, styles);
     });
+};
+
+/* ---------- $c: Chainable DOM helper built on top of $ and $_ ---------- */
+const $c = (selector, index) => {
+    let nodes = $(selector, true);
+    if (!nodes || !nodes.length) nodes = [];
+    if (!Array.isArray(nodes)) nodes = [nodes];
+    if (typeof index === "number") {
+        if (index < 0 || index >= nodes.length) {
+            throw new Error(`Invalid index ${index} for ${nodes.length} nodes`);
+        }
+        nodes = [nodes[index]].filter(Boolean);
+    }
+
+    const invalidateCache = () => {
+        if (_$.cache.has(selector)) _$.delete(selector);
+    };
+
+    const api = {
+        addClass: cls => {
+            nodes.forEach(el => {
+                if (!el) return;
+                addClassesToEl(el, cls);
+            });
+            return api;
+        },
+        removeClass: cls => {
+            nodes.forEach(el => {
+                if (!el) return;
+                removeClassesFromEl(el, cls);
+            });
+            return api;
+        },
+        toggleClass: cls => {
+            nodes.forEach(el => {
+                if (!el) return;
+                toggleClassesOnEl(el, cls);
+            });
+            return api;
+        },
+        attr: (key, val) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                if (val === undefined) {
+                    removeAttrsFromEl(el, key);
+                } else {
+                    setAttrsOnEl(el, { [key]: val });
+                }
+            });
+            return api;
+        },
+        css: (styles) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                setStylesOnEl(el, styles);
+            });
+            return api;
+        },
+
+        // Direct element content (mutations - invalidate cache)
+        html: (content) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                π(() => el.innerHTML = content);
+            });
+            invalidateCache();
+            return api;
+        },
+        text: (content) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                π(() => el.textContent = content);
+            });
+            invalidateCache();
+            return api;
+        },
+
+        // Event handling (no mutation)
+        on: (evt, fn) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.addEventListener(evt, fn);
+            });
+            return api;
+        },
+        off: (evt, fn) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                el.removeEventListener(evt, fn);
+            });
+            return api;
+        },
+
+        // DOM insertion (mutations - invalidate cache)
+        append: (child) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                π(() => el.append(child.cloneNode(true)));
+            });
+            invalidateCache();
+            return api;
+        },
+        prepend: (child) => {
+            nodes.forEach(el => {
+                if (!el) return;
+                π(() => el.prepend(child.cloneNode(true)));
+            });
+            invalidateCache();
+            return api;
+        },
+
+        // Iteration helpers
+        each: (fn) => {
+            nodes.forEach((el, i) => {
+                if (!el) return;
+                fn(el, i);
+            });
+            return api;
+        },
+        map: (fn) => $c(nodes.map((el, i) => fn(el, i)).filter(Boolean)),
+        filter: (fn) => $c(nodes.filter((el, i) => fn(el, i))),
+
+        // Accessors
+        get: () => nodes,
+        first: () => nodes[0] || null,
+    };
+    return api;
 };
 
 /* ---------- Logger ---------- */
@@ -532,133 +660,6 @@ const WSClient = (url, options = {}) => {
     };
 
     return ws;
-};
-
-/* ---------- $c: Chainable DOM helper built on top of $ and $_ ---------- */
-const $c = (selector, index) => {
-    let nodes = $(selector, true);
-    if (!nodes || !nodes.length) nodes = [];
-    if (!Array.isArray(nodes)) nodes = [nodes];
-    if (typeof index === "number") {
-        if (index < 0 || index >= nodes.length) {
-            throw new Error(`Invalid index ${index} for ${nodes.length} nodes`);
-        }
-        nodes = [nodes[index]].filter(Boolean);
-    }
-
-    const invalidateCache = () => {
-        if (_$.cache.has(selector)) _$.delete(selector);
-    };
-
-    const api = {
-        addClass: cls => {
-            nodes.forEach(el => {
-                if (!el) return;
-                addClassesToEl(el, cls);
-            });
-            return api;
-        },
-        removeClass: cls => {
-            nodes.forEach(el => {
-                if (!el) return;
-                removeClassesFromEl(el, cls);
-            });
-            return api;
-        },
-        toggleClass: cls => {
-            nodes.forEach(el => {
-                if (!el) return;
-                toggleClassesOnEl(el, cls);
-            });
-            return api;
-        },
-        attr: (key, val) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                if (val === undefined) {
-                    removeAttrsFromEl(el, key);
-                } else {
-                    setAttrsOnEl(el, { [key]: val });
-                }
-            });
-            return api;
-        },
-        css: (styles) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                setStylesOnEl(el, styles);
-            });
-            return api;
-        },
-
-        // Direct element content (mutations - invalidate cache)
-        html: (content) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                π(() => el.innerHTML = content);
-            });
-            invalidateCache();
-            return api;
-        },
-        text: (content) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                π(() => el.textContent = content);
-            });
-            invalidateCache();
-            return api;
-        },
-
-        // Event handling (no mutation)
-        on: (evt, fn) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                el.addEventListener(evt, fn);
-            });
-            return api;
-        },
-        off: (evt, fn) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                el.removeEventListener(evt, fn);
-            });
-            return api;
-        },
-
-        // DOM insertion (mutations - invalidate cache)
-        append: (child) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                π(() => el.append(child.cloneNode(true)));
-            });
-            invalidateCache();
-            return api;
-        },
-        prepend: (child) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                π(() => el.prepend(child.cloneNode(true)));
-            });
-            invalidateCache();
-            return api;
-        },
-
-        // Iteration helpers
-        each: (fn) => {
-            nodes.forEach((el, i) => {
-                if (!el) return;
-                fn(el, i);
-            });
-            return api;
-        },
-        map: (fn) => $c(nodes.map((el, i) => fn(el, i)).filter(Boolean)),
-        filter: (fn) => $c(nodes.filter((el, i) => fn(el, i))),
-
-        // Accessors
-        get: () => nodes,
-        first: () => nodes[0] || null,
-    };
-    return api;
 };
 
 /* Alias */

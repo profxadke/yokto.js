@@ -8,7 +8,7 @@
  *   - Create element and append function: _
  *   - DOM ready: $$
  *   - DOM updater: $_
- *   - HTTP Clients: RESTClient, GraphQLClient
+ *   - HTTP Clients: RESTClient, GraphQLClient, RESTAdapter, GraphQLAdapter
  *   - WebSocket Client: WSClient
  *   - Inline style helper: $s
  *   - Chained DOM selector and updater: $c
@@ -78,7 +78,17 @@
  *
  *   RESTClient() -> HTTP REST Client
  *
+ *   RESTAdapter(baseUrl, defaultOptions) -> HTTP REST Client Adapter for ease
+ *     - baseUrl: string
+ *     - defaultOptions: object default options like headers, timeout, etc. [see RESTClient]
+ *     - returns: .get, .post, .put, .patch, .delete, and ._ for custom or manual HTTP method
+ *
  *   GraphQLClient() -> GraphQL Client
+ *
+ *   GraphQLAdapter(baseUrl, defaultOptions) -> GraphQL Client Adpter
+ *     - baseUrl: string
+ *     - defaultOptions: object default options like headers (on GraphQLClient Object)
+ *     - returns: client with .query, and .mutate
  *
  *   WSClient() -> WebSocket Client
  *
@@ -486,6 +496,45 @@ const GraphQLClient = (url, { query, variables, ...opts }) => {
 };
 
 /**
+ * RESTAdapter - returns a client bound to a base URL
+ * @param {string} baseUrl - base URL for all requests
+ * @param {object} [defaultOptions] - default options like headers, timeout, etc.
+ * @returns {object} - client with .get, .post, .put, .patch, .delete, and ._ for custom HTTP or manual HTTP method invocation
+ */
+const RESTAdapter = (baseUrl, defaultOptions = {}) => {
+    const call = (method, endpoint = "", options = {}) => {
+        const url = baseUrl.replace(/\/+$/, "") + "/" + endpoint.replace(/^\/+/, "");
+        return RESTClient(method, url, { ...defaultOptions, ...options });
+    };
+
+    return {
+        get: (endpoint, params, opts = {}) => call("GET", endpoint, { ...opts, params }),
+        post: (endpoint, data, opts = {}) => call("POST", endpoint, { ...opts, data }),
+        put: (endpoint, data, opts = {}) => call("PUT", endpoint, { ...opts, data }),
+        patch: (endpoint, data, opts = {}) => call("PATCH", endpoint, { ...opts, data }),
+        delete: (endpoint, opts = {}) => call("DELETE", endpoint, opts),
+        _: (method, endpoint, opts = {}) => call(method.toUpperCase(), endpoint, opts),
+    };
+};
+
+/**
+ * GraphQLAdapter - returns a client bound to a GraphQL endpoint
+ * @param {string} baseUrl - GraphQL endpoint
+ * @param {object} [defaultOptions] - default options like headers
+ * @returns {object} - client with .query and .mutate
+ */
+const GraphQLAdapter = (baseUrl, defaultOptions = {}) => {
+    const call = (query, variables = {}, opts = {}) => {
+        return GraphQLClient(baseUrl, { query, variables, ...defaultOptions, ...opts });
+    };
+
+    return {
+        query: (query, variables, opts = {}) => call(query, variables, opts),
+        mutate: (mutation, variables, opts = {}) => call(mutation, variables, opts),
+    };
+};
+
+/**
  * WebSocket wrapper
  * @param {string} url - WebSocket server URL
  * @param {object} [options] - { onOpen, onClose, onMessage, onError, onReconnectFail, protocols, verbose, autoReconnect, reconnectRetries, reconnectDelay, connectTimeout }
@@ -587,6 +636,21 @@ const WSClient = (url, options = {}) => {
 
     return ws;
 };
+
+/**
+ * Direct DOM access (real DOM nodes, no virtual diffing)
+ * - Example: $d("#app").forEach(el => el.textContent = "Hello");
+ */
+function $d(selector, context = document) {
+    if (typeof selector === "string") {
+        return Array.from(context.querySelectorAll(selector));
+    } else if (selector instanceof Node || selector instanceof Window) {
+        return [selector];
+    } else if (selector instanceof NodeList || Array.isArray(selector)) {
+        return Array.from(selector);
+    }
+    return [];
+}
 
 /* ---------- $c: Chainable DOM helper built on top of $ and $_ ---------- */
 const $c = (selector, index) => {
@@ -710,7 +774,8 @@ const $c = (selector, index) => {
                 nodes = [nodes[index]].filter(Boolean);
             }
             return api;
-        }
+        },
+	dom: () => { return elements }
     };
     return api;
 };
@@ -814,8 +879,10 @@ const $a = route => {
 /* Exports */
 yokto.$, yokto.$$, yokto.__, yokto._$, yokto._, yokto.$_, yokto.$s, yokto.$c, yokto.$t, yokto.$h, yokto.$d, yokto.$w, yokto.$l, yokto.$a = $, $$, __, _$, _, $_, $s, $c, $t, $h, $d, $w, $l, $a;
 yokto.RESTClient = RESTClient;
-yokto.WSClient = WSClient;
+yokto.RESTAdapter = RESTAdapter;
 yokto.GraphQLClient = GraphQLClient;
+yokto.GraphQLAdapter = GraphQLAdapter;
+yokto.WSClient = WSClient;
 yokto.Logger = Logger;
 yokto.defaultLogger = defaultLogger;
 yokto.clearCache = () => _$.clear();

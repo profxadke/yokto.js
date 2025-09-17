@@ -11,6 +11,7 @@
  *   - HTTP Clients: RESTClient, GraphQLClient
  *   - WebSocket Client: WSClient
  *   - Inline style helper: $s
+ *   - Chained DOM selector, and updater: $c
  *
  * API:
  *   $(selector, return_list) -> Selects elements
@@ -31,6 +32,10 @@
  *     - removeAttrs: string|array
  *     - index: number (optional, target only one element)
  *     - If `options` is a string or array, defaults to addClasses
+ *
+ *   $c(query) -> Chained version of $ and $_ combined.
+ *
+ *   $s(query, Styles{}, index) -> Inline CSS/Style setter
  *
  *   RESTClient() -> HTTP REST Client
  *
@@ -179,6 +184,7 @@ const $_ = (query, options = {}) => {
     });
 };
 
+
 /**
  * Inline style setter
  * @param {string} query - CSS selector
@@ -209,6 +215,28 @@ const $s = (query, styles, index) => {
 };
 
 
+/* ---------- Logger ---------- */
+const Logger = (opts = {}) => {
+    const { verbose = false, prefix = "yokto", level = "info" } = opts;
+    const levels = { error: 0, warn: 1, info: 2, debug: 3 };
+    const current = levels[level] ?? 2;
+    function log(lvl, ...args) {
+        if (levels[lvl] <= current || verbose) {
+            const header = `[${prefix}] [${lvl.toUpperCase()}] ${new Date().toISOString()}`;
+            (console[lvl] || console.log)(header, ...args);
+        }
+    }
+    return {
+        error: (...a) => log("error", ...a),
+        warn: (...a) => log("warn", ...a),
+        info: (...a) => log("info", ...a),
+        debug: (...a) => log("debug", ...a),
+    };
+};
+
+const defaultLogger = Logger({ verbose: false, prefix: "yokto" });
+
+
 /**
  * REST API client
  * ------------------------
@@ -219,10 +247,21 @@ const $s = (query, styles, index) => {
  * @param {object} [options.params] - query parameters for GET
  * @param {object} [options.headers] - additional headers
  * @param {boolean} [options.raw=false] - return raw Response instead of JSON
- * @returns {Promise<object|Response>} - JSON response or raw Response
+ * @param {integer} [options.retry=0] - times to retry the request on failure
+ * @param {number} [options.timeout=0] - timeout for the REST HTTP Client
+ * @param {boolean} [options.verbose=false] - verbosoty of the REST HTTP Client
+ * @returns {Promise<object|Response>} - JSON response, raw Response or raised Err (based on option and execution afterwards)
  */
 const RESTClient = async (method, url, options = {}) => {
-    const { data, params, headers, raw } = options;
+    const {
+        data, params, headers = {}, raw = false,
+        retry = 0, timeout = 0, verbose = false,
+        logger = defaultLogger
+    } = options;
+
+    const log = (lvl, ...args) => {
+        if (logger && logger[lvl]) logger[lvl](...args);
+    };
 
     let fullUrl = url;
     if (params && typeof params === "object") {
@@ -230,18 +269,53 @@ const RESTClient = async (method, url, options = {}) => {
         fullUrl += (url.includes("?") ? "&" : "?") + queryString;
     }
 
-    const fetchOptions = {
-        method,
-        headers: { ...(headers || {}) },
-        body: data ? JSON.stringify(data) : undefined,
+    const fetchWithTimeout = (signal) => {
+        const fetchOptions = {
+            method,
+            headers: { ...headers },
+            body: data ? JSON.stringify(data) : undefined,
+            signal
+        };
+        if (data && !fetchOptions.headers["Content-Type"]) {
+            fetchOptions.headers["Content-Type"] = "application/json";
+        }
+        if (verbose) log("info", "REST request", { method, fullUrl, headers: fetchOptions.headers, body: data });
+        return fetch(fullUrl, fetchOptions);
     };
 
-    if (data && !fetchOptions.headers["Content-Type"]) {
-        fetchOptions.headers["Content-Type"] = "application/json";
-    }
+    // normalize retry config
+    let maxAttempts = typeof retry === "number" ? retry : (retry?.attempts || 1);
+    const baseDelay = retry?.delay || 300;
+    const factor = retry?.factor || 1;
 
-    const resp = await fetch(fullUrl, fetchOptions);
-    return raw ? resp : await resp.json();
+    let lastErr = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let controller, timer;
+        try {
+            controller = new AbortController();
+            const signal = controller.signal;
+            if (timeout > 0) timer = setTimeout(() => controller.abort(), timeout);
+
+            const resp = await fetchWithTimeout(signal);
+            if (timer) clearTimeout(timer);
+
+            if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+
+            return raw ? resp : await resp.json();
+        } catch (err) {
+            lastErr = err;
+            log("warn", `REST attempt ${attempt} failed:`, err.message || err);
+            if (attempt < maxAttempts) {
+                const wait = baseDelay * Math.pow(factor, attempt - 1);
+                log("info", `Retrying in ${wait}ms...`);
+                await new Promise(r => setTimeout(r, wait));
+            }
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    }
+    log("error", "REST final failure", lastErr);
+    throw lastErr;
 };
 
 
@@ -253,22 +327,16 @@ const RESTClient = async (method, url, options = {}) => {
  * @param {string} options.query - GraphQL query or mutation
  * @param {object} [options.variables] - variables for query
  * @param {object} [options.headers] - custom headers
+ * @param {object} [options] - custom options for RESTClient
  * @returns {Promise<object>} - parsed JSON response
  */
-const GraphQLClient = async (url, options = {}) => {
-    const { query, variables, headers } = options;
+const GraphQLClient = (url, { query, variables, ...opts }) => {
     if (!query) throw new Error("GraphQL query is required.");
-
-    const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            ...(headers || {}),
-        },
-        body: JSON.stringify({ query, variables }),
+    return RESTClient("POST", url, {
+        data: { query, variables },
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts
     });
-
-    return await resp.json();
 };
 
 
@@ -281,21 +349,84 @@ const GraphQLClient = async (url, options = {}) => {
  * @param {function} [options.onClose] - called on connection close
  * @param {function} [options.onMessage] - called on incoming message
  * @param {function} [options.onError] - called on error
+ * @param {boolean}  [options.verbose] - enable verbose logging, default=false
  * @returns {WebSocket} - WebSocket instance with sendMessage method
  */
 const WSClient = (url, options = {}) => {
-    const ws = new WebSocket(url);
+    const { onOpen, onClose, onMessage, onError, protocols, verbose = false, logger = defaultLogger } = options;
+    const log = (lvl, ...args) => { if (logger && logger[lvl]) logger[lvl](...args); };
 
-    ws.onopen = event => options.onOpen?.(event);
-    ws.onclose = event => options.onClose?.(event);
-    ws.onmessage = event => options.onMessage?.(event);
-    ws.onerror = event => options.onError?.(event);
+    const ws = new WebSocket(url, protocols);
+
+    ws.onopen = e => { if (verbose) log("info", "WS open", url); onOpen?.(e); };
+    ws.onclose = e => { if (verbose) log("warn", "WS closed", e); onClose?.(e); };
+    ws.onmessage = e => { if (verbose) log("debug", "WS message", e.data); onMessage?.(e); };
+    ws.onerror = e => { log("error", "WS error", e); onError?.(e); };
 
     ws.sendMessage = (data) => {
         if (ws.readyState === WebSocket.OPEN) {
             ws.send(typeof data === "string" ? data : JSON.stringify(data));
+        } else {
+            log("warn", "WS sendMessage: socket not open");
         }
     };
-
     return ws;
 };
+
+
+/* ---------- $c: Chainable DOM helper built on top of $ and $_ ---------- */
+const $c = (selector, index) => {
+    let nodes = $(selector, true);
+    if (!nodes) nodes = [];
+    if (!Array.isArray(nodes)) nodes = [nodes];
+    if (typeof index === "number") nodes = [nodes[index]].filter(Boolean);
+
+    const api = {
+        // Delegate directly to $_ for class/attr operations
+        addClass: cls => { $_(selector, { addClasses: cls, index }); return api; },
+        removeClass: cls => { $_(selector, { removeClasses: cls, index }); return api; },
+        toggleClass: cls => { $_(selector, { toggleClasses: cls, index }); return api; },
+        attr: (key, val) => {
+            if (val === undefined) {
+                $_(selector, { removeAttrs: key, index });
+            } else {
+                $_(selector, { setAttrs: { [key]: val }, index });
+            }
+            return api;
+        },
+        css: (styles) => { $s(selector, styles, index); return api; },
+
+        // Direct element content
+        html: (content) => { nodes.forEach(el => el.innerHTML = content); return api; },
+        text: (content) => { nodes.forEach(el => el.textContent = content); return api; },
+
+        // Event handling
+        on: (evt, fn) => { nodes.forEach(el => el.addEventListener(evt, fn)); return api; },
+        off: (evt, fn) => { nodes.forEach(el => el.removeEventListener(evt, fn)); return api; },
+
+        // DOM insertion
+        append: (child) => { nodes.forEach(el => el.append(child.cloneNode(true))); return api; },
+        prepend: (child) => { nodes.forEach(el => el.prepend(child.cloneNode(true))); return api; },
+
+        // Iteration helpers
+        each: (fn) => { nodes.forEach((el, i) => fn(el, i)); return api; },
+        map: (fn) => $c(nodes.map((el, i) => fn(el, i)).filter(Boolean)),
+        filter: (fn) => $c(nodes.filter((el, i) => fn(el, i))),
+
+        // Accessors
+        get: () => nodes,
+        first: () => nodes[0] || null,
+    };
+    return api;
+};
+
+
+/* ---------- Export ---------- */
+const yokto = {
+    $, $$, $_, _, $s, $c,
+    RESTClient, GraphQLClient, WSClient,
+    Logger, defaultLogger
+};
+
+
+if (typeof window !== "undefined") window.yokto = yokto;

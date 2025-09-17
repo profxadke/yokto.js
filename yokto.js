@@ -4,7 +4,7 @@
  * Provides ultra lightweight utilities for DOM selection, manipulation, element creation, traversal
  * DOM ready callbacks, and AJAX (fetch).
  *   - DOM selection: $
- *   - Helpers: __, ___, Logger
+ *   - Helpers: __, Logger
  *   - Element creation: _
  *   - DOM ready: $$
  *   - DOM updater: $_
@@ -21,9 +21,7 @@
  *     - returns array of elements if multiple matches and return_list == true
  *     - useCache: if true, caches/reuses selection
  *
- *   __(obj) -> Checks if obj is an array-like object (helper)
- *
- *   ___(obj) -> Checks if obj is an array is an associative array object, dict in py (helper)
+ *   __(obj) -> Checks if obj is an array is an associative array object, dict in py (helper)
  *
  *   _(parentSelector, tag, attrs, innerText) -> Creates and appends element
  *
@@ -49,6 +47,8 @@
  *   WSClient() -> WebSocket Client
  *
  *   clearCache() -> Clears cached DOM selections
+ *
+ *   _$ -> Holds DOM Query Selection Cache
  *
  */
 
@@ -117,21 +117,13 @@ const $ = (query, return_list = false, useCache = false) => {
     return nodes;
 };
 
-/**
- * Check if object is array-like (close to an Array) and isn't empty - idk why here|legacy.
- * @param {any} obj
- * @returns {boolean} true if object is array-like (excluding empty array-like obj).
- */
-const __ = (obj) => {
-    return obj != null && typeof obj === "object" && typeof obj.length > 0;
-};
 
 /**
  * Check if object is an associative Array (dict from py)
  * @param {any} obj
  * @returns {boolean} true if object is an associative array, object with key-value pair
  */
-const ___ = obj => {
+const __ = obj => {
     return obj !== null && typeof obj === 'object' && !Array.isArray(obj);
 };
 
@@ -155,7 +147,7 @@ const toggleClassesOnEl = (el, cls) => {
 };
 
 const setAttrsOnEl = (el, attrs) => {
-    if (!___(attrs)) return;
+    if (!__(attrs)) return;
     requestAnimationFrame(() => {
         for (const [k, v] of Object.entries(attrs)) {
             el.setAttribute(k, v);
@@ -175,7 +167,7 @@ const setStylesOnEl = (el, styles) => {
         if (prop && val) {
             requestAnimationFrame(() => el.style[prop] = val);
         }
-    } else if (___(styles)) {
+    } else if (__(styles)) {
         requestAnimationFrame(() => {
             for (const [prop, val] of Object.entries(styles)) {
                 el.style[prop] = val;
@@ -197,7 +189,7 @@ const _ = (parentSelector, tag, attrs, innerText) => {
         throw new Error(`Parent Node/Element Doesn't Exist for selector: ${parentSelector}`);
     }
     let elem = document.createElement(tag);
-    if (___(attrs)) {
+    if (__(attrs)) {
         for (let key in attrs) {
             if (Object.prototype.hasOwnProperty.call(attrs, key)) {
                 elem.setAttribute(key, attrs[key]);
@@ -341,7 +333,7 @@ const RESTClient = async (method, url, options = {}) => {
     };
 
     let fullUrl = url;
-    if (params && ___(params)) {
+    if (params && __(params)) {
         const queryString = new URLSearchParams(params).toString();
         fullUrl += (url.includes("?") ? "&" : "?") + queryString;
     }
@@ -675,7 +667,7 @@ $l = Logger;
 
 /* ---------- Export ---------- */
 const yokto = {
-    $, $$, _, $_, $s, $c, $r, $w, $g, $l,
+    $, $$, __, _$, _, $_, $s, $c, $r, $w, $g, $l,
     RESTClient, WSClient, GraphQLClient,
     Logger, defaultLogger,
     clearCache: () => _$.clear() // Method to clear cache

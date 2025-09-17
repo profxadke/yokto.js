@@ -10,7 +10,7 @@
  *   - DOM updater: $_
  *   - HTTP Clients: RESTClient, GraphQLClient
  *   - WebSocket Client: WSClient
- *   - Inline style helper: $c
+ *   - Inline style helper: $s
  *
  * API:
  *   $(selector, return_list) -> Selects elements
@@ -22,8 +22,6 @@
  *   _(parentSelector, tag, attrs, innerText) -> Creates and appends element
  *
  *   $$(fn) -> Executes fn when DOM is ready
- *
- *   $_(method, url, data) -> Fetch wrapper for JSON APIs
  *
  *   $_(query, options|string|array) -> Universal DOM updater
  *     - addClasses: string|array

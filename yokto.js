@@ -369,18 +369,80 @@ const GraphQLClient = (url, { query, variables, ...opts }) => {
  * @param {function} [options.onMessage] - called on incoming message
  * @param {function} [options.onError] - called on error
  * @param {boolean}  [options.verbose] - enable verbose logging, default=false
- * @returns {WebSocket} - WebSocket instance with sendMessage method
+ * @param {boolean}  [options.autoReconnect=true] - auto reconnect on close/error
+ * @param {number}   [options.reconnectRetries=5] - max reconnect attempts
+ * @param {number}   [options.reconnectDelay=1000] - base delay ms (exponential)
+ * @param {number}   [options.connectTimeout=5000] - timeout for initial connect
+ * @returns {WebSocket} - WebSocket instance with sendMessage and reconnect methods
  */
 const WSClient = (url, options = {}) => {
-    const { onOpen, onClose, onMessage, onError, protocols, verbose = false, logger = defaultLogger } = options;
+    const { onOpen, onClose, onMessage, onError, protocols, verbose = false, logger = defaultLogger,
+            autoReconnect = true, reconnectRetries = 5, reconnectDelay = 1000, connectTimeout = 5000 } = options;
     const log = (lvl, ...args) => { if (logger && logger[lvl]) logger[lvl](...args); };
 
-    const ws = new WebSocket(url, protocols);
+    let ws;
+    let retryCount = 0;
+    let isClosedIntentionally = false;
 
-    ws.onopen = e => { if (verbose) log("info", "WS open", url); onOpen?.(e); };
-    ws.onclose = e => { if (verbose) log("warn", "WS closed", e); onClose?.(e); };
-    ws.onmessage = e => { if (verbose) log("debug", "WS message", e.data); onMessage?.(e); };
-    ws.onerror = e => { log("error", "WS error", e); onError?.(e); };
+    const connect = () => {
+        ws = new WebSocket(url, protocols);
+
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timeout')), connectTimeout));
+        const openPromise = new Promise(resolve => ws.onopen = resolve);
+
+        return Promise.race([timeoutPromise, openPromise]).then(() => ws).catch(err => {
+            log("error", "WS connect failed", err);
+            ws.close();
+            throw err;
+        });
+    };
+
+    const setupHandlers = () => {
+        ws.onopen = e => {
+            retryCount = 0;
+            if (verbose) log("info", "WS open", url);
+            onOpen?.(e);
+        };
+        ws.onclose = e => {
+            if (verbose) log("warn", "WS closed", e);
+            onClose?.(e);
+            if (!isClosedIntentionally && autoReconnect && retryCount < reconnectRetries) {
+                retryCount++;
+                const delay = reconnectDelay * Math.pow(2, retryCount - 1);
+                log("info", `WS reconnect attempt ${retryCount}/${reconnectRetries} in ${delay}ms`);
+                setTimeout(init, delay);
+            }
+        };
+        ws.onmessage = e => {
+            if (verbose) log("debug", "WS message", e.data);
+            onMessage?.(e);
+        };
+        ws.onerror = e => {
+            log("error", "WS error", e);
+            onError?.(e);
+            if (autoReconnect && retryCount < reconnectRetries) {
+                ws.close();
+            }
+        };
+    };
+
+    const init = async () => {
+        try {
+            ws = await connect();
+            setupHandlers();
+        } catch (err) {
+            if (autoReconnect && retryCount < reconnectRetries) {
+                retryCount++;
+                const delay = reconnectDelay * Math.pow(2, retryCount - 1);
+                log("warn", `WS initial connect failed, retry ${retryCount} in ${delay}ms`, err);
+                setTimeout(init, delay);
+            } else {
+                throw err;
+            }
+        }
+    };
+
+    init();
 
     ws.sendMessage = (data) => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -389,6 +451,19 @@ const WSClient = (url, options = {}) => {
             log("warn", "WS sendMessage: socket not open");
         }
     };
+
+    ws.reconnect = () => {
+        isClosedIntentionally = false;
+        retryCount = 0;
+        ws.close();
+        init();
+    };
+
+    ws.closeIntentionally = () => {
+        isClosedIntentionally = true;
+        ws.close();
+    };
+
     return ws;
 };
 

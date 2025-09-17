@@ -1,5 +1,0 @@
-# https://www.robotstxt.org/
-
-# DisAllow crawling of all content
-User-agent: *
-Disallow: /

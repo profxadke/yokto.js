@@ -54,7 +54,7 @@
  */
 const $ = (query, return_list) => {
     const elems = document.querySelectorAll(query);
-    if (elems.length === 1 || !return_list) {
+    if (elems.length === 1 && !return_list) {
         return elems[0];
     }
     return Array.prototype.slice.call(elems);
@@ -62,15 +62,25 @@ const $ = (query, return_list) => {
 
 
 /**
- * Check if object is array-like.
+ * Check if object is array-like (close to an Array) and if it's empty.
  * @param {any} obj
- * @returns {boolean} true if object is array-like
+ * @returns {boolean} true if object is array-like and isn't empty.
  */
 const __ = (obj) => {
     if (typeof obj === "object" && obj.length) {
         return true;
-    }
+    } return false;
 };
+
+
+/**
+ * Check if object is an associative Array (dict from py)
+ * @param {any} obj
+ * @returns {boolean} true if object is an associative array, object with key-value pair
+ */
+const ___ = obj => {
+    return obj !== null && typeof obj === 'object' && !Array.isArray(obj);
+}
 
 
 /**
@@ -82,14 +92,15 @@ const __ = (obj) => {
  */
 const _ = (parentSelector, tag, attrs, innerText) => {
     var parentElem = $(parentSelector);
+    if (typeof parentElem === 'undefined') { throw new Error("Parent Node/Element Doesn't Exist."); }
     let elem = document.createElement(tag);
     if (!(__(typeof attrs))) {
         for (key in attrs) {
             elem.setAttribute(key, attrs[key]);
         }
     }
-    if (innerText) {
-        elem.innerText = innerText.toString();
+    if (innerText && typeof innerText === 'string') {
+        elem.innerText = innerText;
     }
     parentElem.appendChild(elem);
 };
@@ -135,7 +146,7 @@ const $_ = (query, options = {}) => {
     }
 
     let nodes = $(query, true);
-    if (!nodes) return;
+    if (!nodes.length) return;
 
     if (!Array.isArray(nodes)) nodes = [nodes];
     if (typeof options.index === "number") {
@@ -145,6 +156,7 @@ const $_ = (query, options = {}) => {
     nodes.forEach(el => {
         // Add classes
         if (options.addClasses) {
+	    if (!typeof options.addClasses === 'string' || !Array.isArray(options.addClasses) { return }
             const clsArr = Array.isArray(options.addClasses)
                 ? options.addClasses
                 : String(options.addClasses).split(/\s+/).filter(Boolean);
@@ -153,6 +165,7 @@ const $_ = (query, options = {}) => {
 
         // Remove classes
         if (options.removeClasses) {
+	    if (!typeof options.addClasses === 'string' || !Array.isArray(options.removeClasses) { return }
             const clsArr = Array.isArray(options.removeClasses)
                 ? options.removeClasses
                 : String(options.removeClasses).split(/\s+/).filter(Boolean);
@@ -161,6 +174,7 @@ const $_ = (query, options = {}) => {
 
         // Toggle classes
         if (options.toggleClasses) {
+	    if (!typeof options.toggleClasses === 'string' || !Array.isArray(options.toggleClasses) { return }
             const clsArr = Array.isArray(options.toggleClasses)
                 ? options.toggleClasses
                 : String(options.toggleClasses).split(/\s+/).filter(Boolean);
@@ -169,6 +183,7 @@ const $_ = (query, options = {}) => {
 
         // Set attributes
         if (options.setAttrs) {
+	    if ( ___(options.setAttrs ) { return }
             for (const [k, v] of Object.entries(options.setAttrs)) {
                 el.setAttribute(k, v);
             }
@@ -176,6 +191,7 @@ const $_ = (query, options = {}) => {
 
         // Remove attributes
         if (options.removeAttrs) {
+	    if (!typeof options.removeAttrs === 'string' || !Array.isArray(options.removeAttrs) { return }
             const attrArr = Array.isArray(options.removeAttrs)
                 ? options.removeAttrs
                 : [options.removeAttrs];
@@ -193,7 +209,7 @@ const $_ = (query, options = {}) => {
  */
 const $s = (query, styles, index) => {
     let nodes = $(query, true);
-    if (!nodes) return;
+    if (!nodes.length) return;
 
     if (!Array.isArray(nodes)) nodes = [nodes];
     if (typeof index === "number") {
@@ -206,10 +222,12 @@ const $s = (query, styles, index) => {
             let [prop, val] = styles.split(":").map(s => s.trim());
             if (prop && val) el.style[prop] = val;
         } else {
-            // apply multiple styles
-            for (const [prop, val] of Object.entries(styles)) {
-                el.style[prop] = val;
-            }
+            // apply multiple styles, if associative array/dict
+	    if (___(styles)) {
+              for (const [prop, val] of Object.entries(styles)) {
+                  el.style[prop] = val;
+              }
+	    }
         }
     });
 };
@@ -284,7 +302,7 @@ const RESTClient = async (method, url, options = {}) => {
     };
 
     // normalize retry config
-    let maxAttempts = typeof retry === "number" ? retry : (retry?.attempts || 1);
+    let maxAttempts = typeof retry === "number" ? retry + 1 : (retry?.attempts || 1);
     const baseDelay = retry?.delay || 300;
     const factor = retry?.factor || 1;
 
@@ -304,6 +322,7 @@ const RESTClient = async (method, url, options = {}) => {
             return raw ? resp : await resp.json();
         } catch (err) {
             lastErr = err;
+	    if (err.name === 'AbortError') throw new Error('Timeout');
             log("warn", `REST attempt ${attempt} failed:`, err.message || err);
             if (attempt < maxAttempts) {
                 const wait = baseDelay * Math.pow(factor, attempt - 1);
@@ -377,7 +396,7 @@ const WSClient = (url, options = {}) => {
 /* ---------- $c: Chainable DOM helper built on top of $ and $_ ---------- */
 const $c = (selector, index) => {
     let nodes = $(selector, true);
-    if (!nodes) nodes = [];
+    if (!nodes.length) nodes = [];
     if (!Array.isArray(nodes)) nodes = [nodes];
     if (typeof index === "number") nodes = [nodes[index]].filter(Boolean);
 
@@ -421,10 +440,17 @@ const $c = (selector, index) => {
 };
 
 
+/* Alias */
+$r = RESTClient;
+$g = GraphQLClient;
+$w = WSClient;
+$l = Logger;
+
+
 /* ---------- Export ---------- */
 const yokto = {
-    $, $$, $_, _, $s, $c,
-    RESTClient, GraphQLClient, WSClient,
+    $, $$, _, $_, $s, $c, $r, $w, $g, $l,
+    RESTClient, WSClient, GraphQLClient,
     Logger, defaultLogger
 };
 

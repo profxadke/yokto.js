@@ -21,7 +21,7 @@
  *     - returns array of elements if multiple matches and return_list == true
  *     - useCache: if true, caches/reuses selection
  *
- *   __(obj) -> Checks if obj is an array is an associative array object, dict in py (helper)
+ *   __(obj) -> Checks if obj is an associative array object, dict in py (helper)
  *
  *   _(parentSelector, tag, attrs, innerText) -> Creates and appends element
  *
@@ -51,6 +51,9 @@
  *   _$ -> Holds DOM Query Selection Cache
  *
  */
+
+// Alias for requestAnimationFrame
+const π = window.requestAnimationFrame.bind(window);
 
 // LRU Cache for $ selections (selector -> WeakRef(nodes array))
 class LRUCache {
@@ -117,7 +120,6 @@ const $ = (query, return_list = false, useCache = false) => {
     return nodes;
 };
 
-
 /**
  * Check if object is an associative Array (dict from py)
  * @param {any} obj
@@ -131,24 +133,24 @@ const __ = obj => {
 const addClassesToEl = (el, cls) => {
     if (typeof cls !== 'string' && !Array.isArray(cls)) return;
     const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-    requestAnimationFrame(() => el.classList.add(...clsArr));
+    π(() => el.classList.add(...clsArr));
 };
 
 const removeClassesFromEl = (el, cls) => {
     if (typeof cls !== 'string' && !Array.isArray(cls)) return;
     const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-    requestAnimationFrame(() => el.classList.remove(...clsArr));
+    π(() => el.classList.remove(...clsArr));
 };
 
 const toggleClassesOnEl = (el, cls) => {
     if (typeof cls !== 'string' && !Array.isArray(cls)) return;
     const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-    requestAnimationFrame(() => clsArr.forEach(c => el.classList.toggle(c)));
+    π(() => clsArr.forEach(c => el.classList.toggle(c)));
 };
 
 const setAttrsOnEl = (el, attrs) => {
     if (!__(attrs)) return;
-    requestAnimationFrame(() => {
+    π(() => {
         for (const [k, v] of Object.entries(attrs)) {
             el.setAttribute(k, v);
         }
@@ -158,17 +160,17 @@ const setAttrsOnEl = (el, attrs) => {
 const removeAttrsFromEl = (el, attrs) => {
     if (typeof attrs !== 'string' && !Array.isArray(attrs)) return;
     const attrArr = Array.isArray(attrs) ? attrs : [attrs];
-    requestAnimationFrame(() => attrArr.forEach(attr => el.removeAttribute(attr)));
+    π(() => attrArr.forEach(attr => el.removeAttribute(attr)));
 };
 
 const setStylesOnEl = (el, styles) => {
     if (typeof styles === "string") {
         let [prop, val] = styles.split(":").map(s => s.trim());
         if (prop && val) {
-            requestAnimationFrame(() => el.style[prop] = val);
+            π(() => el.style[prop] = val);
         }
     } else if (__(styles)) {
-        requestAnimationFrame(() => {
+        π(() => {
             for (const [prop, val] of Object.entries(styles)) {
                 el.style[prop] = val;
             }
@@ -593,7 +595,7 @@ const $c = (selector, index) => {
         html: (content) => {
             nodes.forEach(el => {
                 if (!el) return;
-                requestAnimationFrame(() => el.innerHTML = content);
+                π(() => el.innerHTML = content);
             });
             invalidateCache();
             return api;
@@ -601,7 +603,7 @@ const $c = (selector, index) => {
         text: (content) => {
             nodes.forEach(el => {
                 if (!el) return;
-                requestAnimationFrame(() => el.textContent = content);
+                π(() => el.textContent = content);
             });
             invalidateCache();
             return api;
@@ -627,7 +629,7 @@ const $c = (selector, index) => {
         append: (child) => {
             nodes.forEach(el => {
                 if (!el) return;
-                requestAnimationFrame(() => el.append(child.cloneNode(true)));
+                π(() => el.append(child.cloneNode(true)));
             });
             invalidateCache();
             return api;
@@ -635,7 +637,7 @@ const $c = (selector, index) => {
         prepend: (child) => {
             nodes.forEach(el => {
                 if (!el) return;
-                requestAnimationFrame(() => el.prepend(child.cloneNode(true)));
+                π(() => el.prepend(child.cloneNode(true)));
             });
             invalidateCache();
             return api;

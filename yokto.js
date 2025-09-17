@@ -53,8 +53,9 @@
  *   TAG: <script src="https://cdn.jsdelivr.net/gh/profxadke/yokto.js@main/yokto.min.js"></script>
  */
 
-// Alias for requestAnimationFrame
-const π = window.requestAnimationFrame.bind(window);
+// Alias for requestAnimationFrame, static cache size
+const DEFAULT_MAX_CACHE_SIZE = 100;
+const n = (window.requestAnimationFrame || (fn => setTimeout(fn, 16))).bind(window);
 
 // LRU Cache for $ selections (selector -> WeakRef(nodes array))
 class LRUCache {
@@ -83,7 +84,9 @@ class LRUCache {
     this.cache.clear();
   }
 }
-const _$ = new LRUCache();
+const _$ = new LRUCache(DEFAULT_MAX_CACHE_SIZE || 100);
+const o = new MutationObserver(() => _$.clearCache());
+o.observe(document.body, { childList: true, subtree: true }); // TODO: Optionalize it.
 
 /**
  * Select elements from DOM.
@@ -92,7 +95,7 @@ const _$ = new LRUCache();
  * @param {boolean} [useCache=false] - if true, use/cache the selection for reuse
  * @returns {Element|Element[]|null} - a single Element, array of Elements, or null if no matches
  */
-const $ = (query, return_list = false, useCache = false) => {
+const $ = (query, return_list = false, useCache = false, scope = document) => {
     if (useCache) {
         const cachedRef = _$.get(query);
         if (cachedRef) {
@@ -107,11 +110,16 @@ const $ = (query, return_list = false, useCache = false) => {
             _$.delete(query);
         }
     }
-    const elems = document.querySelectorAll(query);
+    try {
+        const elems = scope.querySelectorAll(query);
+    } catch (err) {
+        throw new Error(`Invalid CSS selector: ${query} or Scope: ${scope} doesn't contain querySelectorAll`);
+    }
     if (elems.length === 0 && !return_list) {
         return null; // Prevent undefined errors
     }
     const nodes = Array.prototype.slice.call(elems);
+    // IDK-WHEN-DOES-THE-DOM-CORRUPT-BUT-HERES-A-FIX: const nodes = Array.from(elems).filter(el => el instanceof Element);
     if (useCache) {
         _$.set(query, new WeakRef(nodes));
     }
@@ -134,24 +142,24 @@ const __ = obj => {
 const addClassesToEl = (el, cls) => {
     if (typeof cls !== 'string' && !Array.isArray(cls)) return;
     const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-    π(() => el.classList.add(...clsArr));
+    n(() => el.classList.add(...clsArr));
 };
 
 const removeClassesFromEl = (el, cls) => {
     if (typeof cls !== 'string' && !Array.isArray(cls)) return;
     const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-    π(() => el.classList.remove(...clsArr));
+    n(() => el.classList.remove(...clsArr));
 };
 
 const toggleClassesOnEl = (el, cls) => {
     if (typeof cls !== 'string' && !Array.isArray(cls)) return;
     const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-    π(() => clsArr.forEach(c => el.classList.toggle(c)));
+    n(() => clsArr.forEach(c => el.classList.toggle(c)));
 };
 
 const setAttrsOnEl = (el, attrs) => {
     if (!__(attrs)) return;
-    π(() => {
+    n(() => {
         for (const [k, v] of Object.entries(attrs)) {
             el.setAttribute(k, v);
         }
@@ -161,17 +169,18 @@ const setAttrsOnEl = (el, attrs) => {
 const removeAttrsFromEl = (el, attrs) => {
     if (typeof attrs !== 'string' && !Array.isArray(attrs)) return;
     const attrArr = Array.isArray(attrs) ? attrs : [attrs];
-    π(() => attrArr.forEach(attr => el.removeAttribute(attr)));
+    n(() => attrArr.forEach(attr => el.removeAttribute(attr)));
 };
 
 const setStylesOnEl = (el, styles) => {
     if (typeof styles === "string") {
-        let [prop, val] = styles.split(":").map(s => s.trim());
-        if (prop && val) {
-            π(() => el.style[prop] = val);
+        const match = styles.match(/^([^:]+):\s*(.+)$/);
+        if ( match ) {
+            const [, prop, val] = match;
+            n(() => el.style[prop] = val);
         }
     } else if (__(styles)) {
-        π(() => {
+        n(() => {
             for (const [prop, val] of Object.entries(styles)) {
                 el.style[prop] = val;
             }
@@ -349,7 +358,7 @@ const $c = (selector, index) => {
         html: (content) => {
             nodes.forEach(el => {
                 if (!el) return;
-                π(() => el.innerHTML = content);
+                n(() => el.innerHTML = content);
             });
             invalidateCache();
             return api;
@@ -357,7 +366,7 @@ const $c = (selector, index) => {
         text: (content) => {
             nodes.forEach(el => {
                 if (!el) return;
-                π(() => el.textContent = content);
+                n(() => el.textContent = content);
             });
             invalidateCache();
             return api;
@@ -383,7 +392,7 @@ const $c = (selector, index) => {
         append: (child) => {
             nodes.forEach(el => {
                 if (!el) return;
-                π(() => el.append(child.cloneNode(true)));
+                n(() => el.append(child.cloneNode(true)));
             });
             invalidateCache();
             return api;
@@ -391,7 +400,7 @@ const $c = (selector, index) => {
         prepend: (child) => {
             nodes.forEach(el => {
                 if (!el) return;
-                π(() => el.prepend(child.cloneNode(true)));
+                n(() => el.prepend(child.cloneNode(true)));
             });
             invalidateCache();
             return api;
@@ -411,6 +420,18 @@ const $c = (selector, index) => {
         // Accessors
         get: () => nodes,
         first: () => nodes[0] || null,
+
+	// Refresh Element-QuerySelected
+	refresh: () => {
+            nodes = $(selector, true);
+            if (!nodes || !nodes.length) nodes = [];
+            if (!Array.isArray(nodes)) nodes = [nodes];
+            if (typeof index === "number") {
+                if (index < 0 || index >= nodes.length) throw new Error(`Invalid index ${index}`);
+                nodes = [nodes[index]].filter(Boolean);
+            }
+            return api;
+        }
     };
     return api;
 };
@@ -559,6 +580,7 @@ const GraphQLClient = (url, { query, variables, ...opts }) => {
  * @param {function} [options.onClose] - called on connection close
  * @param {function} [options.onMessage] - called on incoming message
  * @param {function} [options.onError] - called on error
+ * @param {function} [options.onReconnectFail] - called after all reconnections failed
  * @param {boolean} [options.verbose] - enable verbose logging, default=false
  * @param {boolean} [options.autoReconnect=true] - auto reconnect on close/error
  * @param {number} [options.reconnectRetries=5] - max reconnect attempts
@@ -567,7 +589,7 @@ const GraphQLClient = (url, { query, variables, ...opts }) => {
  * @returns {WebSocket} - WebSocket instance with sendMessage and reconnect methods
  */
 const WSClient = (url, options = {}) => {
-    const { onOpen, onClose, onMessage, onError, protocols, verbose = false, logger = defaultLogger,
+    const { onOpen, onClose, onMessage, onError, onReconnectFail, protocols, verbose = false, logger = defaultLogger,
             autoReconnect = true, reconnectRetries = 5, reconnectDelay = 1000, connectTimeout = 5000 } = options;
     const log = (lvl, ...args) => { if (logger && logger[lvl]) logger[lvl](...args); };
 
@@ -628,6 +650,7 @@ const WSClient = (url, options = {}) => {
                 log("warn", `WS initial connect failed, retry ${retryCount} in ${delay}ms`, err);
                 setTimeout(init, delay);
             } else {
+		onReconnectFail?.(err);
                 throw err;
             }
         }

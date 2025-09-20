@@ -639,9 +639,9 @@ const WSClient = (url, options = {}) => {
 
 /**
  * Direct DOM access (real DOM nodes, no virtual diffing)
- * - Example: $d("#app").forEach(el => el.textContent = "Hello");
+ * - Example: $dom("#app").forEach(el => el.textContent = "Hello");
  */
-function $d(selector, context = document) {
+function $dom(selector, context = document) {
     if (typeof selector === "string") {
         return Array.from(context.querySelectorAll(selector));
     } else if (selector instanceof Node || selector instanceof Window) {
@@ -876,8 +876,282 @@ const $a = route => {
     $l.hash = route
 }
 
+(() => {
+  // Inject default spinner CSS once
+  const ensureSpinnerStyle = (() => {
+    let injected = false;
+    return () => {
+      if (injected) return;
+      injected = true;
+      const css = `.yokto-spinner{display:inline-block;width:24px;height:24px;border:3px solid #ccc;border-top-color:#333;border-radius:50%;animation:yokto-spin .6s linear infinite}@keyframes yokto-spin{to{transform:rotate(360deg)}}.yokto-preloader{display:flex;align-items:center;justify-content:center;padding:8px}`;
+      const style = $t('style', { 'data-yokto-spinner': 'true' }, css);
+      document.head.appendChild(style);
+    };
+  })();
+
+  // Create preloader node from config (string, HTMLElement, or function)
+  const createPreloaderNode = (pre) => {
+    if (!pre && pre !== '') return null;
+    if (typeof pre === 'function') return createPreloaderNode(pre());
+    if (pre instanceof HTMLElement) return pre.cloneNode(true);
+    if (typeof pre === 'string') {
+      const frag = document.createRange().createContextualFragment(pre);
+      const wrapper = $t('div', { class: 'yokto-preloader' });
+      wrapper.appendChild(frag);
+      return wrapper;
+    }
+    return null;
+  };
+
+  // Resolve selector to a single Element
+  const resolveSingle = (selector) => {
+    if (selector instanceof Element) return selector;
+    try {
+      return document.querySelector(selector) || $(selector, false);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // Layout registry and helpers
+  /**
+   * Layout registry and helpers for managing DOM slots with preloaders.
+   * @namespace $layout
+   */
+  const $layout = (() => {
+    const registry = Object.create(null);
+
+    return {
+      /**
+       * Defines a layout with named slots and optional preloaders.
+       * @param {string} name - Unique layout name.
+       * @param {Object.<string, string>} [slots={}] - Slot names mapped to CSS selectors.
+       * @param {Object} [options={}] - Configuration with optional preloaders.
+       * @param {Object.<string, string|HTMLElement|Function>} [options.preloaders] - Slot-specific preloaders (HTML string, node, or function returning same).
+       * @param {string|HTMLElement|Function} [options.defaultPreloader] - Default preloader for all slots.
+       * @returns {Object} Layout object with name, slots, options, and nodes.
+       * @throws {Error} If name is invalid or missing.
+       */
+      define(name, slots = {}, options = {}) {
+        if (!name || typeof name !== 'string') throw new Error('$layout.define: name required');
+        registry[name] = { name, slots, options, nodes: {} };
+        return registry[name];
+      },
+      /**
+       * Retrieves a layout by name.
+       * @param {string} name - Layout name.
+       * @returns {Object|null} Layout object or null if not found.
+       */
+      get(name) {
+        return registry[name] || null;
+      },
+      /**
+       * Renders a layout into a target container, ensuring slots exist and attaching preloaders.
+       * @param {string} name - Layout name.
+       * @param {string|HTMLElement} [target='#app'] - Target container selector or element.
+       * @returns {Promise<Object>} Resolved layout object.
+       * @throws {Error} If layout or target is not found.
+       */
+      async render(name, target = '#app') {
+        const layout = registry[name];
+        if (!layout) throw new Error(`$layout.render: layout '${name}' not found`);
+        ensureSpinnerStyle();
+        const host = resolveSingle(target);
+        if (!host) throw new Error(`$layout.render: target '${target}' not found`);
+        for (const [slot, sel] of Object.entries(layout.slots)) {
+          let node = host.querySelector(sel) || resolveSingle(sel);
+          if (!node) {
+            node = $t('div', { 'data-slot': slot });
+            host.appendChild(node);
+          }
+          layout.nodes[slot] = node;
+          const preCfg = layout.options?.preloaders?.[slot] || layout.options?.defaultPreloader;
+          if (preCfg) {
+            const preNode = createPreloaderNode(preCfg) || createPreloaderNode('<div class="yokto-spinner"></div>');
+            if (preNode) {
+              node.innerHTML = '';
+              node.appendChild(preNode);
+            }
+          }
+        }
+        return layout;
+      },
+      /**
+       * Shows a preloader in a specified slot.
+       * @param {string} name - Layout name.
+       * @param {string} slot - Slot name.
+       * @throws {Error} If layout or slot is not found.
+       */
+      showPreloader(name, slot) {
+        const layout = registry[name];
+        if (!layout || !layout.nodes[slot]) return;
+        const node = layout.nodes[slot];
+        const preCfg = layout.options?.preloaders?.[slot] || layout.options?.defaultPreloader || '<div class="yokto-spinner"></div>';
+        const preNode = createPreloaderNode(preCfg);
+        if (preNode) {
+          node.innerHTML = '';
+          node.appendChild(preNode);
+        }
+      },
+      /**
+       * Hides the preloader in a specified slot by clearing its content.
+       * @param {string} name - Layout name.
+       * @param {string} slot - Slot name.
+       */
+      hidePreloader(name, slot) {
+        const layout = registry[name];
+        if (layout && layout.nodes[slot]) {
+          layout.nodes[slot].innerHTML = '';
+        }
+      }
+    };
+  })();
+
+  // App manager
+  /**
+   * App manager for initializing and switching layouts with state management.
+   * @namespace $app
+   */
+  const $app = (() => {
+    let state = {};
+    let currentLayoutName = null;
+    let currentLayout = null;
+
+    return {
+      /**
+       * Initializes the app with a layout and optional state.
+       * @param {Object} [options={}] - Initialization options.
+       * @param {string} [options.layout] - Layout name to render.
+       * @param {string|HTMLElement} [options.target='#app'] - Target container.
+       * @param {Object} [options.state={}] - Initial state object.
+       * @returns {Promise<Object>} This app instance.
+       */
+      async init({ layout, target = '#app', state: initState = {} } = {}) {
+        state = { ...initState };
+        if (layout) {
+          currentLayoutName = layout;
+          currentLayout = await $layout.render(layout, target);
+        }
+        return this;
+      },
+      /**
+       * Switches to a specified layout.
+       * @param {string} name - Layout name.
+       * @param {string|HTMLElement} [target='#app'] - Target container.
+       * @returns {Promise<Object>} Resolved layout object.
+       */
+      async useLayout(name, target = '#app') {
+        currentLayoutName = name;
+        currentLayout = await $layout.render(name, target);
+        return currentLayout;
+      },
+      /**
+       * Gets the current layout object.
+       * @returns {Object|null} Current layout or null if not set.
+       */
+      getLayout() {
+        return currentLayout;
+      },
+      /**
+       * Gets the current app state.
+       * @returns {Object} Current state object.
+       */
+      get() {
+        return state;
+      },
+      /**
+       * Updates or merges the app state.
+       * @param {Object} [state={}] - State object to merge.
+       */
+      setState(s = {}) {
+        Object.assign(state, s);
+      }
+    };
+  })();
+
+  // Mount content into a layout slot
+  /**
+ * Mounts content into a layout slot, supporting async content with preloaders.
+ * @param {string} layoutName - Layout name.
+ * @param {string} slotName - Slot name.
+ * @param {string|HTMLElement|DocumentFragment|Promise} content - Content to mount (string, node, fragment, or Promise).
+ * @param {Object} [options={}] - Mounting options.
+ * @param {boolean} [options.clear=true] - Clear slot before mounting.
+ * @param {boolean} [options.replace=false] - Replace slot node with content.
+ * @returns {Promise<HTMLElement>} The slot node or replaced node.
+ * @throws {Error} If layout, slot, or content type is invalid.
+ */
+  const $mount = async (layoutName, slotName, content, { clear = true, replace = false } = {}) => {
+    const layout = $layout.get(layoutName);
+    if (!layout) throw new Error(`$mount: layout '${layoutName}' not found`);
+    const slotNode = layout.nodes[slotName];
+    if (!slotNode) throw new Error(`$mount: slot '${slotName}' not found`);
+
+    let resolved = content;
+    if (content && typeof content.then === 'function') {
+      $layout.showPreloader(layoutName, slotName);
+      try {
+        resolved = await content;
+      } finally {
+        $layout.hidePreloader(layoutName, slotName);
+      }
+    }
+
+    if (resolved == null) return slotNode;
+
+    let nodeToInsert;
+    if (typeof resolved === 'string') {
+      nodeToInsert = document.createRange().createContextualFragment(resolved);
+    } else if (resolved instanceof Node || resolved instanceof DocumentFragment) {
+      nodeToInsert = resolved;
+    } else if (Array.isArray(resolved)) {
+      nodeToInsert = document.createDocumentFragment();
+      resolved.forEach(item => {
+        if (typeof item === 'string') {
+          nodeToInsert.appendChild(document.createRange().createContextualFragment(item));
+        } else if (item instanceof Node) {
+          nodeToInsert.appendChild(item);
+        }
+      });
+    } else {
+      throw new Error('$mount: invalid content type');
+    }
+
+    if (clear) slotNode.innerHTML = '';
+    if (replace && nodeToInsert instanceof Node) {
+      slotNode.replaceWith(nodeToInsert);
+      layout.nodes[slotName] = nodeToInsert;
+      return nodeToInsert;
+    }
+    slotNode.appendChild(nodeToInsert);
+    return slotNode;
+  };
+
+  // Attach to yokto object
+  yokto.$layout = $layout;
+  yokto.$app = $app;
+  yokto.$mount = $mount;
+  if (typeof window !== 'undefined') {
+    window.$layout = $layout;
+    window.$app = $app;
+    window.$mount = $mount;
+  }
+})();
+
 /* Exports */
-yokto.$, yokto.$$, yokto.__, yokto._$, yokto._, yokto.$_, yokto.$s, yokto.$c, yokto.$t, yokto.$h, yokto.$d, yokto.$w, yokto.$l, yokto.$a = $, $$, __, _$, _, $_, $s, $c, $t, $h, $d, $w, $l, $a;
+yokto.$ = $
+yokto.$$ = $$
+yokto.__ = __
+yokto._ = _
+yokto._$ = _$
+yokto.$s = $s
+yokto.$c = $c
+yokto.$t = $t
+yokto.$h = $h
+yokto.$d = $d
+yokto.$w = $w
+yokto.$l = $l
+yokto.$a = $a
 yokto.RESTClient = RESTClient;
 yokto.RESTAdapter = RESTAdapter;
 yokto.GraphQLClient = GraphQLClient;

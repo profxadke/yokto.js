@@ -15,7 +15,9 @@
  *   - Element creation: $t
  *   - Hash router: $h
  *
- * ALIAS: $d: document object, $w: window object, $l: location
+ * TODO: use vnode(t, a{}, c[])| t: tag<string>; attrs<object>; children<array>([string|vnode]) - for $t, _ and a func. to return vnode(s) from $
+ *
+ * ALIAS: $doc: document object, $win: window object, $loc: location, $dom: real dom
  *
  * API:
  *   __(obj) -> Checks if obj is an associative array (dict in Python)
@@ -108,10 +110,10 @@ const yokto = {
 };
 
 /* Aliases */
-const $d = document;
-const $w = window;
-const $l = $d.location;
-const n = (window.requestAnimationFrame || (fn => setTimeout(fn, 16))).bind(window);
+const $doc = document;
+const $win = window;
+const $loc = $doc.location;
+const n = ($win.requestAnimationFrame || (fn => setTimeout(fn, 16))).bind($win);
 
 // LRU Cache for $ selections (selector -> WeakRef(nodes array))
 class LRUCache {
@@ -140,12 +142,12 @@ class LRUCache {
         this.cache.clear();
     }
 }
-const _$ = new LRUCache(yokto.MAX_CACHE_SIZE || 100);
+const _$ = new LRUCache(yokto.config.MAX_CACHE_SIZE || 100);
 
 // Optional MutationObserver for cache invalidation
 const o = new MutationObserver(() => _$.clear());
-if (yokto.config.observeDOM) {
-    o.observe(document.body, { childList: true, subtree: true });
+if (yokto.config.observeDOM && $doc && $doc.body) {
+    o.observe($doc.body, { childList: true, subtree: true });
 }
 
 /**
@@ -156,7 +158,7 @@ if (yokto.config.observeDOM) {
  * @param {Document|Element} [scope=document] - DOM element to scope query
  * @returns {Element|Element[]|null} - a single Element, array of Elements, or null if no matches
  */
-const $ = (query, return_list = false, useCache = false, scope = document) => {
+const $ = (query, return_list = false, useCache = false, scope = $doc) => {
     if (useCache) {
         const cachedRef = _$.get(query);
         if (cachedRef) {
@@ -257,7 +259,7 @@ const setStylesOnEl = (el, styles) => {
  * @param {string} [innerText] - optional inner text content
  */
 const $t = ( tag, attrs, innerText ) => {
-    let elem = document.createElement(tag);
+    let elem = $doc.createElement(tag);
     if (__(attrs)) {
         for (let key in attrs) {
             if (Object.prototype.hasOwnProperty.call(attrs, key)) {
@@ -295,13 +297,13 @@ const $$ = (fn) => {
         throw new Error("Argument passed to ready should be a function.");
     }
 
-    if (document.readyState != "loading") {
+    if ($doc.readyState != "loading") {
         fn();
-    } else if (document.addEventListener) {
-        document.addEventListener("DOMContentLoaded", fn, { once: true });
+    } else if ($doc.addEventListener) {
+        $doc.addEventListener("DOMContentLoaded", fn, { once: true });
     } else {
-        document.attachEvent("onreadystatechange", function () {
-            if (document.readyState != "loading") fn();
+        $doc.attachEvent("onreadystatechange", function () {
+            if ($doc.readyState != "loading") fn();
         });
     }
 };
@@ -424,6 +426,8 @@ const RESTClient = async (method, url, options = {}) => {
             headers: { ...headers },
             body: data ? (() => {
                 try {
+                    // allow FormData/URLSearchParams passthrough
+                    if (data instanceof FormData || data instanceof URLSearchParams) return data;
                     return JSON.stringify(data);
                 } catch (err) {
                     log("error", "RESTClient: Failed to serialize body", err);
@@ -432,7 +436,7 @@ const RESTClient = async (method, url, options = {}) => {
             })() : undefined,
             signal
         };
-        if (data && !fetchOptions.headers["Content-Type"]) {
+        if (data && !fetchOptions.headers["Content-Type"] && !(data instanceof FormData)) {
             fetchOptions.headers["Content-Type"] = "application/json";
         }
         if (verbose) {
@@ -465,8 +469,8 @@ const RESTClient = async (method, url, options = {}) => {
             return raw ? resp : await resp.json();
         } catch (err) {
             lastErr = err;
-            if (err.name === 'AbortError') throw new Error('Timeout');
-            log("warn", `REST attempt ${attempt} failed:`, err.message || err);
+            if (err && err.name === 'AbortError') throw new Error('Timeout');
+            log("warn", `REST attempt ${attempt} failed:`, err && err.message ? err.message : err);
             if (attempt < maxAttempts) {
                 const wait = baseDelay * Math.pow(factor, attempt - 1);
                 log("info", `Retrying in ${wait}ms...`);
@@ -557,7 +561,7 @@ const WSClient = (url, options = {}) => {
 
         return Promise.race([timeoutPromise, openPromise]).then(() => ws).catch(err => {
             log("error", "WS connect failed", err);
-            ws.close();
+            try { ws.close(); } catch(e){}
             throw err;
         });
     };
@@ -586,7 +590,7 @@ const WSClient = (url, options = {}) => {
             log("error", "WS error", e);
             onError?.(e);
             if (autoReconnect && retryCount < reconnectRetries) {
-                ws.close();
+                try { ws.close(); } catch(e){}
             }
         };
     };
@@ -625,13 +629,13 @@ const WSClient = (url, options = {}) => {
     ws.reconnect = () => {
         isClosedIntentionally = false;
         retryCount = 0;
-        ws.close();
+        try { ws.close(); } catch(e){}
         init();
     };
 
     ws.closeIntentionally = () => {
         isClosedIntentionally = true;
-        ws.close();
+        try { ws.close(); } catch(e){}
     };
 
     return ws;
@@ -641,7 +645,7 @@ const WSClient = (url, options = {}) => {
  * Direct DOM access (real DOM nodes, no virtual diffing)
  * - Example: $dom("#app").forEach(el => el.textContent = "Hello");
  */
-function $dom(selector, context = document) {
+function $dom(selector, context = $doc) {
     if (typeof selector === "string") {
         return Array.from(context.querySelectorAll(selector));
     } else if (selector instanceof Node || selector instanceof Window) {
@@ -665,7 +669,7 @@ const $c = (selector, index) => {
     }
 
     const invalidateCache = () => {
-        if (_$.cache.has(selector)) _$.delete(selector);
+        if (_$.cache && _$.cache.has && _$.cache.has(selector)) _$.delete(selector);
     };
 
     const api = {
@@ -775,7 +779,7 @@ const $c = (selector, index) => {
             }
             return api;
         },
-	dom: () => { return elements }
+        dom: () => { return nodes }
     };
     return api;
 };
@@ -786,7 +790,7 @@ const $c = (selector, index) => {
  * @param {Function} [callback] - Callback({ path, params, query }) for route match
  */
 const $h = (route, callback) => {
-    const logger = yokto.defaultLogger;
+    const logger = yokto.defaultLogger || defaultLogger;
     const routes = $h.routes || ($h.routes = new Map());
     const log = (lvl, ...args) => logger[lvl](...args);
 
@@ -819,7 +823,7 @@ const $h = (route, callback) => {
 
     // Handle hash change
     const handleHash = () => {
-        const hash = window.location.hash.replace(/^#/, '') || '/';
+        const hash = $loc.hash.replace(/^#/, '') || '/';
         const [path, queryStr] = hash.split('?');
         const query = {};
         if (queryStr) {
@@ -829,18 +833,18 @@ const $h = (route, callback) => {
         }
 
         let matched = false;
-        for (const [route, { regex, callback, paramNames }] of routes) {
-            const match = path.match(regex);
+        for (const [routeKey, { regex: r, callback: cb, paramNames: pn }] of routes) {
+            const match = path.match(r);
             if (match) {
                 const params = {};
-                paramNames.forEach((name, i) => {
+                pn.forEach((name, i) => {
                     params[name] = match[i + 1];
                 });
                 n(() => {
-                    yokto.clearCache(); // Clear DOM cache on route change
-                    callback({ path, params, query });
+                    try { yokto.clearCache(); } catch(e){}
+                    cb({ path, params, query });
                 });
-                log('debug', `Route matched: ${route}`, { path, params, query });
+                log('debug', `Route matched: ${routeKey}`, { path, params, query });
                 matched = true;
                 break;
             }
@@ -848,7 +852,7 @@ const $h = (route, callback) => {
 
         if (!matched && $h.defaultRoute) {
             n(() => {
-                yokto.clearCache(); // Clear DOM cache for default route
+                try { yokto.clearCache(); } catch(e){}
                 $h.defaultRoute({ path, params: {}, query });
             });
             log('debug', 'Default route triggered', { path, query });
@@ -857,7 +861,7 @@ const $h = (route, callback) => {
 
     // Initialize if not already done
     if (!$h.initialized) {
-        window.addEventListener('hashchange', handleHash, { passive: true });
+        $win.addEventListener('hashchange', handleHash, { passive: true });
         $$(handleHash); // Run on DOM ready
         $h.initialized = true;
         log('info', 'Hash router initialized');
@@ -873,285 +877,298 @@ const $a = route => {
     const re = new RegExp(`^[${ec}]+|[${ec}]+$`, 'g');
     route = route.replace(re, '');
     if ( ! route.startsWith('/') ) { route = '/' + route };
-    $l.hash = route
+    $loc.hash = route
 }
 
-(() => {
-  // Inject default spinner CSS once
-  const ensureSpinnerStyle = (() => {
-    let injected = false;
-    return () => {
-      if (injected) return;
-      injected = true;
-      const css = `.yokto-spinner{display:inline-block;width:24px;height:24px;border:3px solid #ccc;border-top-color:#333;border-radius:50%;animation:yokto-spin .6s linear infinite}@keyframes yokto-spin{to{transform:rotate(360deg)}}.yokto-preloader{display:flex;align-items:center;justify-content:center;padding:8px}`;
-      const style = $t('style', { 'data-yokto-spinner': 'true' }, css);
-      document.head.appendChild(style);
-    };
-  })();
+/* ------------------------------------------------------------------
+ * Layout / App / Mount utilities (async-safe, per-layout preloaders)
+ * ------------------------------------------------------------------ */
 
-  // Create preloader node from config (string, HTMLElement, or function)
-  const createPreloaderNode = (pre) => {
-    if (!pre && pre !== '') return null;
-    if (typeof pre === 'function') return createPreloaderNode(pre());
-    if (pre instanceof HTMLElement) return pre.cloneNode(true);
-    if (typeof pre === 'string') {
-      const frag = document.createRange().createContextualFragment(pre);
-      const wrapper = $t('div', { class: 'yokto-preloader' });
-      wrapper.appendChild(frag);
-      return wrapper;
-    }
-    return null;
-  };
-
-  // Resolve selector to a single Element
-  const resolveSingle = (selector) => {
-    if (selector instanceof Element) return selector;
-    try {
-      return document.querySelector(selector) || $(selector, false);
-    } catch (e) {
-      return null;
-    }
-  };
-
-  // Layout registry and helpers
-  /**
-   * Layout registry and helpers for managing DOM slots with preloaders.
-   * @namespace $layout
-   */
-  const $layout = (() => {
+/**
+ * $layout - layout registry & helpers
+ * Provides:
+ *   - $layout.define(name, slots, options)
+ *   - $layout.get(name)
+ *   - $layout.render(name, target)
+ *   - $layout.showPreloader(name, slot)
+ *   - $layout.hidePreloader(name, slot)
+ *
+ * slots: { slotName: selectorString }
+ * options: { preloaders: { slotName: preloader }, defaultPreloader: preloader }
+ */
+const $layout = (() => {
     const registry = Object.create(null);
 
-    return {
-      /**
-       * Defines a layout with named slots and optional preloaders.
-       * @param {string} name - Unique layout name.
-       * @param {Object.<string, string>} [slots={}] - Slot names mapped to CSS selectors.
-       * @param {Object} [options={}] - Configuration with optional preloaders.
-       * @param {Object.<string, string|HTMLElement|Function>} [options.preloaders] - Slot-specific preloaders (HTML string, node, or function returning same).
-       * @param {string|HTMLElement|Function} [options.defaultPreloader] - Default preloader for all slots.
-       * @returns {Object} Layout object with name, slots, options, and nodes.
-       * @throws {Error} If name is invalid or missing.
-       */
-      define(name, slots = {}, options = {}) {
-        if (!name || typeof name !== 'string') throw new Error('$layout.define: name required');
-        registry[name] = { name, slots, options, nodes: {} };
-        return registry[name];
-      },
-      /**
-       * Retrieves a layout by name.
-       * @param {string} name - Layout name.
-       * @returns {Object|null} Layout object or null if not found.
-       */
-      get(name) {
-        return registry[name] || null;
-      },
-      /**
-       * Renders a layout into a target container, ensuring slots exist and attaching preloaders.
-       * @param {string} name - Layout name.
-       * @param {string|HTMLElement} [target='#app'] - Target container selector or element.
-       * @returns {Promise<Object>} Resolved layout object.
-       * @throws {Error} If layout or target is not found.
-       */
-      async render(name, target = '#app') {
-        const layout = registry[name];
-        if (!layout) throw new Error(`$layout.render: layout '${name}' not found`);
-        ensureSpinnerStyle();
-        const host = resolveSingle(target);
-        if (!host) throw new Error(`$layout.render: target '${target}' not found`);
-        for (const [slot, sel] of Object.entries(layout.slots)) {
-          let node = host.querySelector(sel) || resolveSingle(sel);
-          if (!node) {
-            node = $t('div', { 'data-slot': slot });
-            host.appendChild(node);
-          }
-          layout.nodes[slot] = node;
-          const preCfg = layout.options?.preloaders?.[slot] || layout.options?.defaultPreloader;
-          if (preCfg) {
-            const preNode = createPreloaderNode(preCfg) || createPreloaderNode('<div class="yokto-spinner"></div>');
-            if (preNode) {
-              node.innerHTML = '';
-              node.appendChild(preNode);
+    // Ensure spinner CSS injected once
+    let _spinnerInjected = false;
+    const _ensureSpinnerStyle = () => {
+        if (_spinnerInjected) return;
+        _spinnerInjected = true;
+        try {
+            const css = `
+/* yokto default spinner */
+.yokto-spinner{display:inline-block;width:36px;height:36px;border:4px solid rgba(0,0,0,0.12);border-top-color:rgba(0,0,0,0.6);border-radius:50%;animation:yokto-spin .8s linear infinite}
+@keyframes yokto-spin{to{transform:rotate(360deg)}}
+.yokto-preloader{display:flex;align-items:center;justify-content:center;padding:8px}
+`;
+            const s = $doc.createElement('style');
+            s.setAttribute('data-yokto-spinner', 'true');
+            s.appendChild($doc.createTextNode(css));
+            $doc.head.appendChild(s);
+        } catch (e) {
+            defaultLogger.debug("spinner style injection failed", e);
+        }
+    };
+
+    const _createPreloaderNode = (pre) => {
+        if (!pre && pre !== '') return null;
+        if (typeof pre === 'function') return _createPreloaderNode(pre());
+        if (pre instanceof HTMLElement) return pre.cloneNode(true);
+        if (typeof pre === 'string') {
+            const frag = $doc.createRange().createContextualFragment(pre);
+            const wrapper = $doc.createElement('div');
+            wrapper.className = 'yokto-preloader';
+            wrapper.appendChild(frag);
+            return wrapper;
+        }
+        return null;
+    };
+
+    const _resolveSingle = (selectorOrElement) => {
+        if (!selectorOrElement) return null;
+        if (selectorOrElement instanceof Element) return selectorOrElement;
+        try {
+            return $doc.querySelector(selectorOrElement);
+        } catch (e) {
+            // fallback: try $ helper
+            try {
+                const r = $(selectorOrElement);
+                if (!r) return null;
+                if (Array.isArray(r)) return r[0];
+                return r;
+            } catch (e2) {
+                return null;
             }
-          }
         }
-        return layout;
-      },
-      /**
-       * Shows a preloader in a specified slot.
-       * @param {string} name - Layout name.
-       * @param {string} slot - Slot name.
-       * @throws {Error} If layout or slot is not found.
-       */
-      showPreloader(name, slot) {
-        const layout = registry[name];
-        if (!layout || !layout.nodes[slot]) return;
-        const node = layout.nodes[slot];
-        const preCfg = layout.options?.preloaders?.[slot] || layout.options?.defaultPreloader || '<div class="yokto-spinner"></div>';
-        const preNode = createPreloaderNode(preCfg);
-        if (preNode) {
-          node.innerHTML = '';
-          node.appendChild(preNode);
-        }
-      },
-      /**
-       * Hides the preloader in a specified slot by clearing its content.
-       * @param {string} name - Layout name.
-       * @param {string} slot - Slot name.
-       */
-      hidePreloader(name, slot) {
-        const layout = registry[name];
-        if (layout && layout.nodes[slot]) {
-          layout.nodes[slot].innerHTML = '';
-        }
-      }
     };
-  })();
 
-  // App manager
-  /**
-   * App manager for initializing and switching layouts with state management.
-   * @namespace $app
-   */
-  const $app = (() => {
-    let state = {};
-    let currentLayoutName = null;
-    let currentLayout = null;
-
-    return {
-      /**
-       * Initializes the app with a layout and optional state.
-       * @param {Object} [options={}] - Initialization options.
-       * @param {string} [options.layout] - Layout name to render.
-       * @param {string|HTMLElement} [options.target='#app'] - Target container.
-       * @param {Object} [options.state={}] - Initial state object.
-       * @returns {Promise<Object>} This app instance.
-       */
-      async init({ layout, target = '#app', state: initState = {} } = {}) {
-        state = { ...initState };
-        if (layout) {
-          currentLayoutName = layout;
-          currentLayout = await $layout.render(layout, target);
+    function define(name, slots = {}, options = {}) {
+        if (!name || typeof name !== 'string') throw new Error("$layout.define: name required");
+        if (registry[name]) {
+            defaultLogger.warn(`$layout.define: layout '${name}' already defined, overwriting`);
         }
-        return this;
-      },
-      /**
-       * Switches to a specified layout.
-       * @param {string} name - Layout name.
-       * @param {string|HTMLElement} [target='#app'] - Target container.
-       * @returns {Promise<Object>} Resolved layout object.
-       */
-      async useLayout(name, target = '#app') {
-        currentLayoutName = name;
-        currentLayout = await $layout.render(name, target);
-        return currentLayout;
-      },
-      /**
-       * Gets the current layout object.
-       * @returns {Object|null} Current layout or null if not set.
-       */
-      getLayout() {
-        return currentLayout;
-      },
-      /**
-       * Gets the current app state.
-       * @returns {Object} Current state object.
-       */
-      get() {
-        return state;
-      },
-      /**
-       * Updates or merges the app state.
-       * @param {Object} [state={}] - State object to merge.
-       */
-      setState(s = {}) {
-        Object.assign(state, s);
-      }
-    };
-  })();
-
-  // Mount content into a layout slot
-  /**
- * Mounts content into a layout slot, supporting async content with preloaders.
- * @param {string} layoutName - Layout name.
- * @param {string} slotName - Slot name.
- * @param {string|HTMLElement|DocumentFragment|Promise} content - Content to mount (string, node, fragment, or Promise).
- * @param {Object} [options={}] - Mounting options.
- * @param {boolean} [options.clear=true] - Clear slot before mounting.
- * @param {boolean} [options.replace=false] - Replace slot node with content.
- * @returns {Promise<HTMLElement>} The slot node or replaced node.
- * @throws {Error} If layout, slot, or content type is invalid.
- */
-  const $mount = async (layoutName, slotName, content, { clear = true, replace = false } = {}) => {
-    const layout = $layout.get(layoutName);
-    if (!layout) throw new Error(`$mount: layout '${layoutName}' not found`);
-    const slotNode = layout.nodes[slotName];
-    if (!slotNode) throw new Error(`$mount: slot '${slotName}' not found`);
-
-    let resolved = content;
-    if (content && typeof content.then === 'function') {
-      $layout.showPreloader(layoutName, slotName);
-      try {
-        resolved = await content;
-      } finally {
-        $layout.hidePreloader(layoutName, slotName);
-      }
+        registry[name] = {
+            name,
+            slots: { ...slots },
+            options: { ...(options || {}) },
+            nodes: {}
+        };
+        return registry[name];
     }
 
-    if (resolved == null) return slotNode;
+    function get(name) {
+        return registry[name] || null;
+    }
 
-    let nodeToInsert;
-    if (typeof resolved === 'string') {
-      nodeToInsert = document.createRange().createContextualFragment(resolved);
-    } else if (resolved instanceof Node || resolved instanceof DocumentFragment) {
-      nodeToInsert = resolved;
-    } else if (Array.isArray(resolved)) {
-      nodeToInsert = document.createDocumentFragment();
-      resolved.forEach(item => {
-        if (typeof item === 'string') {
-          nodeToInsert.appendChild(document.createRange().createContextualFragment(item));
-        } else if (item instanceof Node) {
-          nodeToInsert.appendChild(item);
+    async function render(name, target = '#app') {
+        const layout = registry[name];
+        if (!layout) throw new Error(`$layout.render: layout '${name}' not found`);
+        _ensureSpinnerStyle();
+
+        const host = _resolveSingle(target);
+        if (!host) throw new Error(`$layout.render: target '${target}' not found in DOM`);
+
+        for (const [slot, sel] of Object.entries(layout.slots)) {
+            let node = null;
+            try {
+                node = host.querySelector(sel);
+            } catch (e) {
+                node = _resolveSingle(sel);
+            }
+            if (!node) {
+                node = $doc.createElement('div');
+                node.setAttribute('data-slot', slot);
+                host.appendChild(node);
+                defaultLogger.debug(`$layout.render: created placeholder for slot '${slot}' in host`);
+            }
+            layout.nodes[slot] = node;
+
+            const preCfg = (layout.options && layout.options.preloaders && layout.options.preloaders[slot]) || layout.options?.defaultPreloader || null;
+            if (preCfg) {
+                const preNode = _createPreloaderNode(preCfg) || _createPreloaderNode('<div class="yokto-spinner" aria-hidden="true"></div>');
+                if (preNode) {
+                    node.innerHTML = '';
+                    node.appendChild(preNode);
+                }
+            }
         }
-      });
+        return layout;
+    }
+
+    function showPreloader(name, slot) {
+        const layout = registry[name];
+        if (!layout) throw new Error(`$layout.showPreloader: layout '${name}' not found`);
+        const node = layout.nodes[slot];
+        if (!node) throw new Error(`$layout.showPreloader: slot '${slot}' not found in layout '${name}'`);
+        const preCfg = layout.options?.preloaders?.[slot] || layout.options?.defaultPreloader || '<div class="yokto-spinner" aria-hidden="true"></div>';
+        const preNode = _createPreloaderNode(preCfg) || _createPreloaderNode('<div class="yokto-spinner" aria-hidden="true"></div>');
+        node.innerHTML = '';
+        if (preNode) node.appendChild(preNode);
+    }
+
+    function hidePreloader(name, slot) {
+        const layout = registry[name];
+        if (!layout) throw new Error(`$layout.hidePreloader: layout '${name}' not found`);
+        const node = layout.nodes[slot];
+        if (!node) return;
+        node.innerHTML = '';
+    }
+
+    return {
+        define,
+        get,
+        render,
+        showPreloader,
+        hidePreloader,
+        _registry: registry
+    };
+})();
+
+/**
+ * App manager
+ * - $app.init({ layout, target, state })
+ * - $app.useLayout(name, target)
+ * - $app.getLayout()
+ * - $app.state (getter)
+ */
+const $app = (() => {
+    let _state = {};
+    let _currentLayoutName = null;
+    let _currentLayout = null;
+
+    return {
+        async init(opts = {}) {
+            const { layout, target = '#app', state = {} } = opts;
+            _state = Object.assign({}, state);
+            if (layout) {
+                _currentLayoutName = layout;
+                _currentLayout = await $layout.render(layout, target);
+            }
+            return this;
+        },
+        async useLayout(name, target = '#app') {
+            _currentLayoutName = name;
+            _currentLayout = await $layout.render(name, target);
+            return _currentLayout;
+        },
+        getLayout() {
+            return _currentLayout;
+        },
+        get state() {
+            return _state;
+        },
+        setState(s = {}) {
+            Object.assign(_state, s);
+        },
+        _currentLayoutName: () => _currentLayoutName
+    };
+})();
+
+/**
+ * $mount(layoutName, slotName, content, options)
+ *
+ * content: string | HTMLElement | DocumentFragment | Array<string|Node> | Promise<...>
+ * options: { clear: boolean (default true), replace: boolean (default false) }
+ *
+ * Async-safe: if content is a Promise, it shows per-slot preloader while awaiting.
+ * Returns inserted node or slot node.
+ */
+const $mount = async (layoutName, slotName, content, options = {}) => {
+    const layout = $layout.get(layoutName);
+    if (!layout) throw new Error(`$mount: layout '${layoutName}' not registered`);
+    const slotNode = layout.nodes[slotName] || null;
+    if (!slotNode) throw new Error(`$mount: slot '${slotName}' not found in layout '${layoutName}'`);
+
+    const { clear = true, replace = false } = options;
+
+    let resolved = content;
+    if (resolved && typeof resolved.then === 'function') {
+        try {
+            $layout.showPreloader(layoutName, slotName);
+        } catch (e) {
+            defaultLogger.debug("$mount: showPreloader failed", e);
+        }
+        try {
+            resolved = await resolved;
+        } finally {
+            try { $layout.hidePreloader(layoutName, slotName); } catch (e) { defaultLogger.debug("$mount: hidePreloader failed", e); }
+        }
+    }
+
+    let nodeToInsert = null;
+    if (resolved == null) {
+        return slotNode;
+    } else if (typeof resolved === 'string') {
+        const frag = $doc.createRange().createContextualFragment(resolved);
+        nodeToInsert = frag;
+    } else if (resolved instanceof DocumentFragment) {
+        nodeToInsert = resolved;
+    } else if (resolved instanceof HTMLElement || resolved instanceof Node) {
+        nodeToInsert = resolved;
+    } else if (Array.isArray(resolved)) {
+        const frag = $doc.createDocumentFragment();
+        for (const item of resolved) {
+            if (typeof item === 'string') {
+                frag.appendChild($doc.createRange().createContextualFragment(item));
+            } else if (item instanceof Node) {
+                frag.appendChild(item);
+            }
+        }
+        nodeToInsert = frag;
     } else {
-      throw new Error('$mount: invalid content type');
+        throw new Error("$mount: invalid content type (must be string|Node|Fragment|Promise|Array)");
     }
 
     if (clear) slotNode.innerHTML = '';
-    if (replace && nodeToInsert instanceof Node) {
-      slotNode.replaceWith(nodeToInsert);
-      layout.nodes[slotName] = nodeToInsert;
-      return nodeToInsert;
+
+    if (replace) {
+        if (nodeToInsert instanceof DocumentFragment) {
+            const parent = slotNode.parentNode;
+            parent.insertBefore(nodeToInsert, slotNode);
+            parent.removeChild(slotNode);
+        } else if (nodeToInsert instanceof Node) {
+            slotNode.replaceWith(nodeToInsert);
+            layout.nodes[slotName] = nodeToInsert;
+        } else {
+            slotNode.appendChild(nodeToInsert);
+        }
+        return layout.nodes[slotName];
+    } else {
+        if (nodeToInsert instanceof DocumentFragment) slotNode.appendChild(nodeToInsert);
+        else slotNode.appendChild(nodeToInsert);
+        return slotNode;
     }
-    slotNode.appendChild(nodeToInsert);
-    return slotNode;
-  };
+};
 
-  // Attach to yokto object
-  yokto.$layout = $layout;
-  yokto.$app = $app;
-  yokto.$mount = $mount;
-  if (typeof window !== 'undefined') {
-    window.$layout = $layout;
-    window.$app = $app;
-    window.$mount = $mount;
-  }
-})();
+/* ------------------------------------------------------------------
+ * Exports: attach to yokto and window in a controlled, valid way
+ * ------------------------------------------------------------------ */
+yokto.$ = $;
+yokto.$$ = $$;
+yokto.__ = __;
+yokto._$ = _$;
+yokto._ = _;
+yokto.$_ = $_;
+yokto.$s = $s;
+yokto.$c = $c;
+yokto.$t = $t;
+yokto.$h = $h;
+yokto.$dom = $dom;
+yokto.$doc = $doc;
+yokto.$win = $win;
+yokto.$loc = $loc;
+yokto.$a = $a;
 
-/* Exports */
-yokto.$ = $
-yokto.$$ = $$
-yokto.__ = __
-yokto._ = _
-yokto._$ = _$
-yokto.$s = $s
-yokto.$c = $c
-yokto.$t = $t
-yokto.$h = $h
-yokto.$d = $d
-yokto.$w = $w
-yokto.$l = $l
-yokto.$a = $a
 yokto.RESTClient = RESTClient;
 yokto.RESTAdapter = RESTAdapter;
 yokto.GraphQLClient = GraphQLClient;
@@ -1159,6 +1176,26 @@ yokto.GraphQLAdapter = GraphQLAdapter;
 yokto.WSClient = WSClient;
 yokto.Logger = Logger;
 yokto.defaultLogger = defaultLogger;
+
+yokto.$layout = $layout;
+yokto.$app = $app;
+yokto.$mount = $mount;
+
 yokto.clearCache = () => _$.clear();
 
-if (typeof window !== "undefined") window.yokto = yokto;
+if (typeof $win !== "undefined") {
+    $win.yokto = yokto;
+    // also expose common helpers to window for convenience
+    $win.$ = $;
+    $win._ = _;  // TODO: Actually expose all helpers to window
+    $win.$_ = $_;
+    $win.$$ = $$;
+    $win.$s = $s;
+    $win.$c = $c;
+    $win.$t = $t;
+    $win.$h = $h;
+    $win.$a = $a;
+    $win.$layout = $layout;
+    $win.$app = $app;
+    $win.$mount = $mount;
+}

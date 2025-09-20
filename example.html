@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Yokto.js - Layout / Mount Example</title>
+
+  <!-- optional tiny page styling for clarity -->
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 0; padding: 0; }
+    #app { display: grid; grid-template-rows: auto 1fr auto; min-height: 100vh; gap: 8px; }
+    #header { background:#0b74da; color: #fff; padding: 12px; }
+    #body { padding: 16px; background: #f7f8fa; }
+    #footer { background:#222; color:#eee; padding: 8px; font-size: 0.9rem; }
+    .nav a { color: #fff; margin-right: 10px; text-decoration: none; }
+    .yokto-preloader { display:flex; align-items:center; justify-content:center; padding:12px; }
+    .yokto-spinner { display:inline-block; width:28px; height:28px; border:3px solid rgba(0,0,0,0.12); border-top-color:rgba(0,0,0,0.6); border-radius:50%; animation:yokto-spin .8s linear infinite; }
+    @keyframes yokto-spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="header"></div>
+    <div id="body"></div>
+    <div id="footer"></div>
+  </div>
+
+  <!-- include your yokto library -->
+  <script src="yokto.js"></script>
+
+  <script>
+    // Example: register a layout named "main" that maps logical slot names to selectors.
+    $layout.define('app', {
+      header: '#header',
+      main:   '#body',
+      footer: '#footer'
+    }, {
+      // per-slot preloader HTML (optional). If not provided, default spinner is used.
+      preloaders: {
+        main: '<div class="yokto-preloader"><div class="yokto-spinner" aria-hidden="true"></div><span style="margin-left:8px">Loading content…</span></div>'
+      },
+      defaultPreloader: '<div class="yokto-preloader"><div class="yokto-spinner" aria-hidden="true"></div></div>'
+    });
+
+    // Initialize the app using that layout and target container (#app).
+    // $app.init is async-safe; it resolves after layout.render has ensured slots exist.
+    (async () => {
+      await $app.init({ layout: 'app', target: '#app', state: { user: null } });
+
+      // Put a persistent footer (static) once; then routes will only update slot content.
+      // This demonstrates not re-rendering the entire DOM — footer remains in place unless replaced.
+      $mount('app', 'footer', '<div>© 2025 — Yokto Demo</div>');
+
+      // Create two UI routes via $h that are JS-only handlers.
+      // Each route uses $mount to update named slots. This keeps logic (routing) separate from UI (mount).
+      $h('/home', ({ path, params, query }) => {
+        // header with nav; mount header (synchronous)
+        $mount('app', 'header', `
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div><strong>Yokto Demo</strong></div>
+            <nav class="nav">
+              <a href="#/home">Home</a>
+              <a href="#/about">About</a>
+            </nav>
+          </div>
+        `, { clear: true });
+
+        // main content: async loader (simulates a fetch). while this Promise resolves,
+        // $layout will show the per-slot preloader for "main" that we defined earlier.
+        $mount('app', 'main', new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(`
+              <h1>Home</h1>
+              <p>Welcome to the Yokto demo. Content loaded at ${new Date().toLocaleTimeString()}.</p>
+              <p>This update replaced only the <code>#body</code> slot — the rest of the DOM was unchanged.</p>
+            `);
+          }, 800);
+        }), { clear: true });
+      });
+
+      $h('/about', ({ path }) => {
+        $mount('app', 'header', `
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div><strong>Yokto Demo</strong></div>
+            <nav class="nav">
+              <a href="#/home">Home</a>
+              <a href="#/about">About</a>
+            </nav>
+          </div>
+        `, { clear: true });
+
+        // short async "fetch"
+        $mount('app', 'main', new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(`
+              <h1>About</h1>
+              <p>Yokto is tiny, synchronous-first, and supports async mounting of slot content.</p>
+            `);
+          }, 450);
+        }), { clear: true });
+      });
+
+      // default route: go to #/home if none present
+      $h('/', () => {
+        // use $a helper to ensure a proper hash value
+        $a('/home');
+      });
+
+      // If there's already a hash (e.g., user opened #/about), the router will trigger on DOM-ready (handled by $h).
+      // If not, trigger default route by ensuring a hash is present.
+      if (!location.hash) $a('/home');
+    })();
+  </script>
+</body>
+</html>

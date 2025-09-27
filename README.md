@@ -1,260 +1,229 @@
 # yokto.js
 
-A micro JavaScript library centered around a reactive virtual DOM (vNode) engine. It provides a suite of lightweight tools for modern web development, including efficient DOM selection and manipulation, element creation, chainable APIs, HTTP clients for REST and GraphQL, WebSocket management, and client-side hash-based routing. It's designed for building dynamic applications with a minimal footprint.
+**yokto.js** is a micro JavaScript library centered around a reactive virtual DOM (vNode) engine. It provides a suite of lightweight tools for modern web development, including efficient DOM selection and manipulation, element creation, chainable APIs, HTTP clients for REST and GraphQL, WebSocket management, and client-side hash-based routing. It's designed for building dynamic applications with a minimal footprint and a clean, expressive API.
 
-## Features
+## Core Concepts: The vNode Engine
 
-- **vNode Engine**: A reactive virtual DOM system that syncs with the real DOM.
-- **DOM Selection**: `$` and `$$` for querying elements and wrapping them in reactive vNodes.
-- **vNode Creation**: `$v` to create new vNode elements from scratch.
-- **DOM Mounting**: `_` to mount vNodes into the DOM.
-- **Chainable API**: `$c` for expressive, chainable DOM manipulation on vNodes.
-- **DOM Ready**: `$$` for executing code when the DOM is loaded.
-- **HTTP Clients**: `RESTClient`, `GraphQLClient`, and factory adapters (`RESTAdapter`, `GraphQLAdapter`) for API calls.
-- **WebSocket**: `WSClient` for real-time communication.
-- **Hash Routing**: `$h` for client-side hash routing, and `$a` for navigation.
-- **Logging**: `Logger` for customizable debug/warn/error logging.
-- **Helpers**: `__` for object checks, `$s` for inline styles.
-- **Useful Shorthand Aliases**: `$doc` -> `document`, `$win` -> `window`, `$loc` -> `document.location`.
+At the heart of `yokto.js` is a reactive **vNode (virtual node)** engine. Instead of directly returning raw DOM elements from queries, `yokto.js` wraps them in a `vNode` object. This object is a lightweight representation of a DOM element that stays in sync with it.
 
-## API
+- **Reactivity**: When you change a property on a `vNode` (like `vNode.attrs.id = 'new'`), the library automatically updates the actual DOM element.
+- **Efficiency**: A `WeakMap`-based cache ensures that the same DOM element is always wrapped by the same `vNode` instance, preventing unnecessary work.
+- **Clean API**: The `vNode` provides a consistent and powerful API for manipulation, traversal, and event handling.
 
-### `$` - vNode Selection
+---
 
-Selects the first DOM element matching the selector and returns it as a reactive `vNode`.
+## The `vNode` Object
 
-```js
-yokto.$(selector, useCache)
-```
+A `vNode` is the fundamental building block in `yokto.js`. It has the following structure:
 
-- `selector`: CSS selector (e.g., `.class`, `#id`).
-- `useCache`: If `true`, caches the query result (default: `false`).
-- Returns: A single `vNode` object or `null` if no element is found.
+- `vNode.tag`: (`string`) The element's tag name (e.g., `'div'`).
+- `vNode.attrs`: (`Proxy`) A reactive proxy for the element's attributes. Setting a property on `attrs` directly updates the DOM.
+  ```js
+  const myDiv = yokto.$('#my-div');
+  myDiv.attrs.class = 'active highlighted'; // Sets the class attribute
+  myDiv.attrs['data-id'] = 123; // Sets data-id="123"
+  delete myDiv.attrs.id; // Removes the id attribute
+  ```
+- `vNode.text`: (`string`) A reactive property for the element's `textContent`.
+  ```js
+  const header = yokto.$('h1');
+  header.text = 'Welcome to yokto.js'; // Updates the h1's text
+  ```
+- `vNode.children`: (`vNodeList`) A getter that returns a list of all child nodes (elements and non-empty text nodes).
 
-**Example**:
+### `vNode.$` - The Escape Hatch
 
-```js
-const item = yokto.$('.item'); // Single vNode
-if (item) {
-  item._.addClasses('active');
-  item.attrs.id = 'new-id'; // Attributes are reactive
-}
-```
+The `$` property provides direct access to the underlying DOM element and its native properties. This is useful for interoperability with other libraries or when you need to call a native browser API.
 
-### `$$` - vNode List Selection / DOM Ready
+- `vNode.$.node`: The raw DOM element (e.g., `HTMLElement`).
+- `vNode.$.parent`: The parent element, returned as a `vNode`.
+- `vNode.$.children`: The raw `HTMLCollection` of child elements.
+- `vNode.$.isConnected`: A boolean indicating if the element is connected to the DOM.
 
-Selects all DOM elements matching the selector and returns them as a `vNodeList`, OR executes a function when the DOM is ready.
+### `vNode._` - Manipulation Methods
 
-```js
-yokto.$$(selector, useCache)
-yokto.$$(callback)
-```
+The `_` property is an object containing methods for direct, chainable DOM manipulation.
 
-- `selector`: CSS selector.
-- `useCache`: If `true`, caches the query result (default: `false`).
-- `callback`: A function to execute when `DOMContentLoaded` fires.
-- Returns: A `vNodeList` (an array-like object with extra methods) or `undefined` if used as a DOM ready handler.
-
-**Example**:
+- `_.addClasses(...names)`: Adds one or more CSS classes.
+- `_.removeClasses(...names)`: Removes one or more CSS classes.
+- `_.toggleClass(name, force)`: Toggles a CSS class.
+- `_.css(styles)`: Applies inline CSS styles from an object (e.g., `{ color: 'red' }`).
+- `_.on(event, handler)`: Attaches an event listener.
+- `_.off(event, handler)`: Removes an event listener.
+- `_.append(child)`: Appends a child (`vNode` or text string) to the element.
+- `_.prepend(child)`: Prepends a child (`vNode` or text string) to the element.
+- `_.remove()`: Removes the element from the DOM.
 
 ```js
-const items = yokto.$$('.item', true); // Cached vNodeList
-items.addClasses('highlight');
-
-yokto.$$(() => console.log('DOM is ready!'));
+const box = yokto.$('.box');
+box._.addClasses('visible')
+     .css({ backgroundColor: 'blue', color: 'white' })
+     .on('click', () => alert('Box clicked!'));
 ```
 
-### `$v` - vNode Creation
+---
 
-Creates a new, unmounted `vNode` element.
+## The `vNodeList` Object
+
+A `vNodeList` is an array-like object containing multiple `vNodes`, returned by the `$$` selector. It comes with powerful methods for performing actions on the entire collection at once.
+
+### Iteration Methods
+- `each(fn)`: Executes a function for each `vNode` in the list.
+- `map(fn)`: Creates a new `vNodeList` by mapping each `vNode` to a new value.
+- `filter(fn)`: Creates a new `vNodeList` with `vNodes` that pass the filter function.
+- `reduce(fn, initial)`: Reduces the list to a single value.
+
+### Bulk Manipulation Methods
+These methods apply the corresponding action to every `vNode` in the list.
+- `addClasses(...names)`
+- `removeClasses(...names)`
+- `toggleClass(name, force)`
+- `css(styles)`
+- `on(event, handler)`
+- `off(event, handler)`
+- `remove()`
+
+### Accessor Methods
+- `first()`: Returns the first `vNode` in the list.
+- `last()`: Returns the last `vNode` in the list.
 
 ```js
-yokto.$v(tag, attrs, children)
+// Add the 'active' class to all list items and attach a click handler
+const items = yokto.$$('li');
+items.addClasses('active').on('click', (e) => {
+  console.log('List item clicked:', e.target.textContent);
+});
 ```
 
-- `tag`: HTML tag name (e.g., `div`).
-- `attrs`: Object of attributes (optional).
-- `children`: A string, a single `vNode`, or an array of strings/vNodes (optional).
+---
 
-**Example**:
+## Awesome Example: A Simple To-Do List
+
+This example demonstrates how the core features work together to build a functional component in just a few lines of code.
+
+```html
+<!-- In your HTML file -->
+<div id="app">
+  <h3>My To-Do List</h3>
+  <input type="text" id="todo-input" placeholder="Add a new task...">
+  <button id="add-btn">Add</button>
+  <ul id="todo-list"></ul>
+</div>
+```
 
 ```js
-const newDiv = yokto.$v('div', { class: 'item' }, 'Hello, vNode!');
+// In your JavaScript file
+const input = $('#todo-input');
+const addButton = $('#add-btn');
+const list = $('#todo-list');
+
+const addTask = () => {
+  const taskText = input.text.trim();
+  if (!taskText) return; // Ignore empty input
+
+  // 1. Create a "delete" button vNode
+  const deleteBtn = $v('button', {}, 'Delete');
+
+  // 2. Create the new <li> vNode with the text and button
+  const newTask = $v('li', {}, [
+    taskText + ' ', // Add text content
+    deleteBtn        // Add the button vNode as a child
+  ]);
+
+  // 3. Add a click event to the delete button to remove the task
+  deleteBtn._.on('click', () => newTask._.remove());
+
+  // 4. Mount the new task to the list
+  _(newTask, list);
+
+  // 5. Clear the input field
+  input.text = '';
+};
+
+// Add task when the button is clicked or Enter is pressed
+addButton._.on('click', addTask);
+input._.on('keyup', (e) => {
+  if (e.key === 'Enter') {
+    addTask();
+  }
+});
 ```
 
-### `_` - Mount vNode
+---
 
-Mounts a `vNode` to a parent DOM element.
+## Full API Reference
 
-```js
-yokto._(vNode, parentElement)
-```
+### DOM & vNodes
 
-- `vNode`: The `vNode` to mount (created with `$v` or selected with `$`).
-- `parentElement`: The native DOM element or `vNode` to append the child to.
+#### `$(selector, useCache)`
+Selects the first DOM element and returns it as a `vNode`.
+- **Returns**: `vNode` or `null`.
 
-**Example**:
+#### `$$(selectorOrFn, useCache)`
+1.  Selects all DOM elements and returns a `vNodeList`.
+2.  If a function is passed, executes it on `DOMContentLoaded`.
+- **Returns**: `vNodeList` or `undefined`.
 
-```js
-const container = yokto.$('#container');
-const newDiv = yokto.$v('div', { class: 'item' }, 'Hello!');
-yokto._(newDiv, container); // Appends the new div to #container
-```
+#### `$v(tag, attrs, children)`
+Creates a new, unmounted `vNode`.
+- `children`: Can be a string, a single `vNode`, or an array of strings/`vNodes`.
+- **Returns**: `vNode`.
 
-### `$c` - Chainable vNode Helper
+#### `_(vNode, parentElement)`
+Mounts a `vNode` into the DOM.
+- `parentElement`: Can be a raw DOM element or another `vNode`.
+- **Returns**: The mounted `vNode`.
 
-A chainable API for performing actions on a `vNode` or `vNodeList`.
-
-```js
-yokto.$c(selector, index)
-```
-
-- `selector`: A CSS selector string, a `vNode`, or a `vNodeList`.
-- `index`: Optional index to target a single element from a list.
+#### `$c(selector, index)`
+A chainable API for powerful and expressive DOM manipulations. It wraps a `vNode` or `vNodeList`.
 - **Chainable Methods**: `addClass`, `removeClass`, `toggleClass`, `attr`, `css`, `text`, `on`, `off`, `append`, `prepend`, `remove`, `each`, `map`, `filter`.
-- **Getter Methods**: `get`, `first`, `last`, `dom`.
+- **Getter Methods**: `get`, `first`, `last`, `dom` (returns raw DOM nodes).
 
-**Example**:
+### HTTP & WebSockets
 
+#### `RESTClient(method, url, options)`
+A `fetch`-based HTTP client.
+- `options`: `{ data, params, headers, raw, retry, timeout, verbose, logger }`.
+- **Returns**: `Promise` resolving to JSON or a raw `Response` object.
+
+#### `RESTAdapter(baseUrl, defaultOptions)`
+A factory for creating reusable `RESTClient` instances.
 ```js
-yokto.$c('.item')
-    .addClass('active')
-    .css({ color: 'red' })
-    .text('Updated Text')
-    .on('click', () => console.log('Clicked!'));
-
-const firstItemNode = yokto.$c('.item').first();
-```
-
-### `$s` - Inline Style Setter
-
-A utility to quickly set inline CSS styles on elements.
-
-```js
-yokto.$s(query, styles, index)
-```
-
-- `query`: CSS selector.
-- `styles`: An object `{ prop: value }` or a string `prop: value`.
-- `index`: Optional index to target a single element in a multi-element query.
-
-**Example**:
-
-```js
-yokto.$s('.item', { background: 'blue' });
-yokto.$s('.item', 'color: green', 0); // Style only the first item
-```
-
-### `$h` & `$a` - Hash Router
-
-`$h` registers hash-based routes, and `$a` triggers navigation.
-
-```js
-yokto.$h(route, callback)
-yokto.$a(route)
-```
-
-- `route`: For `$h`, a string like `/path` or `/user/:id`. For `$a`, the path to navigate to.
-- `callback`: A function `({ path, params, query })` that runs when a route matches.
-- A default route can be set by passing a function as the first argument to `$h`.
-
-**Example**:
-
-```js
-// Define routes
-yokto.$h('/home', () => console.log('Home page'));
-yokto.$h('/user/:id', ({ params }) => console.log(`User: ${params.id}`));
-yokto.$h(({ path }) => console.log(`404: ${path} not found`)); // Default
-
-// Navigate
-yokto.$a('/home');
-```
-
-### `RESTClient` & `RESTAdapter`
-
-A `fetch`-based HTTP client with retry and timeout logic, and an adapter for creating reusable instances.
-
-```js
-yokto.RESTClient(method, url, options)
-yokto.RESTAdapter(baseUrl, defaultOptions)
-```
-
-**Example**:
-
-```js
-// Direct call
-try {
-    const data = await yokto.RESTClient('GET', '/api/users');
-    console.log(data);
-} catch (err) {
-    console.error('API error:', err);
-}
-
-// Using an adapter
 const api = yokto.RESTAdapter('/api');
 const users = await api.get('users');
 const newUser = await api.post('users', { name: 'John' });
 ```
 
-### `GraphQLClient` & `GraphQLAdapter`
+#### `GraphQLClient(url, { query, variables, ...opts })`
+A client for making GraphQL requests.
 
-A client for making GraphQL requests, and an adapter for convenience.
+#### `GraphQLAdapter(baseUrl, defaultOptions)`
+A factory for creating reusable `GraphQLClient` instances.
 
-```js
-yokto.GraphQLClient(url, { query, variables, ...opts })
-yokto.GraphQLAdapter(baseUrl, defaultOptions)
-```
-
-**Example**:
-
-```js
-const gqlApi = yokto.GraphQLAdapter('/graphql');
-const { data } = await gqlApi.query('{ user(id: 1) { name } }');
-console.log(data.user.name);
-```
-
-### `WSClient` - WebSocket Client
-
-A wrapper for WebSocket connections that handles auto-reconnection.
-
-```js
-yokto.WSClient(url, options)
-```
-
+#### `WSClient(url, options)`
+A WebSocket client with auto-reconnection logic.
 - `options`: `{ onOpen, onClose, onMessage, onError, autoReconnect, ... }`.
-- Returns a `WebSocket` instance with added `sendMessage`, `reconnect`, and `closeIntentionally` methods.
 
-**Example**:
+### Utilities
 
-```js
-const ws = yokto.WSClient('ws://example.com', {
-    onMessage: (e) => console.log('Received:', e.data)
-});
-ws.sendMessage('Hello from client');
-```
+#### `$h(route, callback)` & `$a(route)`
+A simple and effective client-side hash router.
+- `$h`: Defines a route and its callback. A function passed as the first argument becomes the default/404 route.
+- `$a`: Programmatically navigates to a hash route.
 
-### `Logger` - Logging Utility
+#### `$s(query, styles, index)`
+A legacy utility to quickly set inline CSS styles. Prefer using `vNode._.css()` or `$c().css()`.
 
+#### `Logger({ verbose, prefix, level })`
 A customizable logger for handling different log levels.
 
-```js
-yokto.Logger({ verbose, prefix, level })
-```
+#### `clearCache()`
+Manually clears the LRU cache used by `$` and `$$` for DOM queries.
 
-**Example**:
-
-```js
-const logger = yokto.Logger({ level: 'debug', prefix: 'MyApp' });
-logger.debug('This is a debug message.');
-```
-
-### `clearCache` - Clear DOM Cache
-
-Clears the LRU cache used by `$` and `$$` for DOM queries.
-
-```js
-yokto.clearCache()
-```
+#### Miscellaneous Helpers
+- `__(obj)`: Returns `true` if the input is a non-array object.
+- `$dom(selector)`: A legacy selector that returns an `Array` of raw DOM nodes instead of `vNodes`.
+- `$doc`, `$win`, `$loc`: Shorthand aliases for `document`, `window`, and `document.location`.
 
 ## Configuration
 
@@ -262,13 +231,6 @@ You can configure `yokto.js` by modifying the `yokto.config` object.
 
 - `yokto.config.observeDOM`: If `true`, enables a `MutationObserver` to automatically clear the selector cache when the DOM changes (default: `true`).
 - `yokto.config.MAX_CACHE_SIZE`: The maximum number of selectors to keep in the LRU cache (default: `100`).
-
-## Best Practices
-
-- **vNode Reactivity**: Modify element attributes directly on the `vNode.attrs` proxy to automatically update the DOM. Use `vNode._` methods for other manipulations like adding classes or changing styles.
-- **Immutability vs. Mutability**: For complex UI updates, it can be easier to create a new vNode with `$v` and replace an old one, rather than performing many small mutations.
-- **Error Handling**: Always wrap `RESTClient` and `GraphQLClient` calls in `try...catch` blocks to handle network or server errors.
-- **Routing**: Always define a default route with `$h` to gracefully handle unmatched hash URLs.
 
 ## Notes
 

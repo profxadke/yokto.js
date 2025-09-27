@@ -232,7 +232,89 @@ You can configure `yokto.js` by modifying the `yokto.config` object.
 - `yokto.config.observeDOM`: If `true`, enables a `MutationObserver` to automatically clear the selector cache when the DOM changes (default: `true`).
 - `yokto.config.MAX_CACHE_SIZE`: The maximum number of selectors to keep in the LRU cache (default: `100`).
 
+## Best Practices
+
+- **Embrace the vNode**: Whenever possible, interact with the DOM through the `vNode` API (`.attrs`, `.text`, `._` methods). Use the `vNode.$` escape hatch only when you need to work with a browser API or third-party library that requires a raw DOM node.
+
+- **Component-like Functions**: For reusable UI elements, create functions that return a configured `vNode`. This is a lightweight way to create components.
+  ```js
+  const createButton = (text, onClick) => {
+    const btn = $v('button', { class: 'custom-btn' }, text);
+    btn._.on('click', onClick);
+    return btn;
+  };
+
+  const myButton = createButton('Click Me!', () => alert('Clicked!'));
+  _(myButton, $('#app'));
+  ```
+
+- **State Management**: `yokto.js` is a DOM utility, not a state management library. For simple applications, managing state in local variables is fine. For more complex apps, you can easily integrate it with dedicated state management libraries.
+
+- **Performance and Caching**:
+  - Use `useCache: true` with `$` and `$$` for selectors that are queried often and don't change (e.g., `$('#app')`).
+  - Avoid caching selectors that are highly dynamic (e.g., inside a loop with changing IDs) to prevent cache churn.
+  - The built-in `MutationObserver` handles most cache invalidation automatically. If you are performing complex, synchronous DOM updates that the observer might miss, you can call `yokto.clearCache()` manually.
+
+- **Security**: Avoid setting `verbose: true` in `RESTClient` or `WSClient` options in a production environment, as it can lead to leaking sensitive request/response data to the console.
+
+- **Error Handling**: Always wrap asynchronous operations like `RESTClient` and `GraphQLClient` in `try...catch` blocks to gracefully handle network failures or API errors.
+
+## Another Awesome Example: Fetching and Rendering API Data
+
+This example shows how to use `RESTClient` to fetch data from a public API and dynamically render a list.
+
+```html
+<!-- In your HTML file -->
+<div id="app-fetch">
+  <h3>User List</h3>
+  <button id="fetch-btn">Fetch Users</button>
+  <ul id="user-list"></ul>
+  <p id="loading-text" style="display: none;">Loading...</p>
+</div>
+```
+
+```js
+// In your JavaScript file
+$$(() => { // Run when the DOM is ready
+  const fetchBtn = $('#fetch-btn');
+  const userList = $('#user-list');
+  const loadingText = $('#loading-text');
+
+  const fetchUsers = async () => {
+    // Show loading indicator and disable button
+    loadingText._.css({ display: 'block' });
+    fetchBtn.attrs.disabled = true;
+    userList.text = ''; // Clear previous list
+
+    try {
+      // Fetch data from a public API
+      const users = await yokto.RESTClient('GET', 'https://jsonplaceholder.typicode.com/users');
+
+      // Create and mount a vNode for each user
+      users.forEach(user => {
+        const userCard = $v('li', { class: 'user-card' }, [
+          $v('h4', {}, user.name),
+          $v('p', {}, `Email: ${user.email}`)
+        ]);
+        _(userCard, userList);
+      });
+
+    } catch (error) {
+      userList.text = 'Failed to load users. Please try again.';
+      console.error('API Error:', error);
+    } finally {
+      // Hide loading indicator and re-enable button
+      loadingText._.css({ display: 'none' });
+      delete fetchBtn.attrs.disabled;
+    }
+  };
+
+  fetchBtn._.on('click', fetchUsers);
+});
+```
+
 ## Notes
 
 - **Browser Compatibility**: `yokto.js` uses modern JavaScript (ES6+), including `Proxy` and `WeakMap`. It is not compatible with legacy browsers like IE11 without polyfills.
 - **Cache**: The selector cache is an LRU (Least Recently Used) cache. If you are creating many unique selectors dynamically, consider setting `useCache=false` to avoid churning the cache. The cache is automatically cleared on hash-based route changes.
+

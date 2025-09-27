@@ -2,6 +2,16 @@
 
 **yokto.js** is a micro JavaScript library centered around a reactive virtual DOM (vNode) engine. It provides a suite of lightweight tools for modern web development, including efficient DOM selection and manipulation, element creation, chainable APIs, HTTP clients for REST and GraphQL, WebSocket management, and client-side hash-based routing. It's designed for building dynamic applications with a minimal footprint and a clean, expressive API.
 
+## Installation
+
+Include via CDN:
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/profxadke/yokto.js@main/yokto.min.js"></script>
+```
+
+Or download `yokto.js` and host locally.
+
 ## Core Concepts: The vNode Engine
 
 At the heart of `yokto.js` is a reactive **vNode (virtual node)** engine. Instead of directly returning raw DOM elements from queries, `yokto.js` wraps them in a `vNode` object. This object is a lightweight representation of a DOM element that stays in sync with it.
@@ -158,26 +168,57 @@ input._.on('keyup', (e) => {
 #### `$(selector, useCache)`
 Selects the first DOM element and returns it as a `vNode`.
 - **Returns**: `vNode` or `null`.
+```js
+const div = yokto.$('.item'); // Single element
+const items = yokto.$('.item', true); // Cached
+
+const item = yokto.$('.item'); // Single vNode
+if (item) {
+  item._.addClasses('active');
+  item.attrs.id = 'new-id'; // Attributes are reactive
+}
+```
 
 #### `$$(selectorOrFn, useCache)`
 1.  Selects all DOM elements and returns a `vNodeList`.
 2.  If a function is passed, executes it on `DOMContentLoaded`.
 - **Returns**: `vNodeList` or `undefined`.
+```js
+const items = yokto.$$('.item', true); // Cached vNodeList
+items.addClasses('highlight');
+
+yokto.$$(() => console.log('DOM is ready!'));
+```
 
 #### `$v(tag, attrs, children)`
 Creates a new, unmounted `vNode`.
 - `children`: Can be a string, a single `vNode`, or an array of strings/`vNodes`.
 - **Returns**: `vNode`.
+```js
+const newDiv = yokto.$v('div', { class: 'item' }, 'Hello, vNode!');
+```
 
 #### `_(vNode, parentElement)`
 Mounts a `vNode` into the DOM.
 - `parentElement`: Can be a raw DOM element or another `vNode`.
 - **Returns**: The mounted `vNode`.
+```js
+const container = yokto.$('#container');
+const newDiv = yokto.$v('div', { class: 'item' }, 'Hello!');
+yokto._(newDiv, container); // Appends the new div to #container
+```
 
 #### `$c(selector, index)`
 A chainable API for powerful and expressive DOM manipulations. It wraps a `vNode` or `vNodeList`.
 - **Chainable Methods**: `addClass`, `removeClass`, `toggleClass`, `attr`, `css`, `text`, `on`, `off`, `append`, `prepend`, `remove`, `each`, `map`, `filter`.
 - **Getter Methods**: `get`, `first`, `last`, `dom` (returns raw DOM nodes).
+```js
+yokto.$c('.item')
+    .addClass('active')
+    .css({ color: 'red' })
+    .text('Updated Text')
+    .on('click', () => console.log('Clicked!'));
+```
 
 ### HTTP & WebSockets
 
@@ -185,10 +226,20 @@ A chainable API for powerful and expressive DOM manipulations. It wraps a `vNode
 A `fetch`-based HTTP client.
 - `options`: `{ data, params, headers, raw, retry, timeout, verbose, logger }`.
 - **Returns**: `Promise` resolving to JSON or a raw `Response` object.
+```js
+// Direct call
+try {
+    const data = await yokto.RESTClient('GET', '/api/users');
+    console.log(data);
+} catch (err) {
+    console.error('API error:', err);
+}
+```
 
 #### `RESTAdapter(baseUrl, defaultOptions)`
 A factory for creating reusable `RESTClient` instances.
 ```js
+// Using an adapter
 const api = yokto.RESTAdapter('/api');
 const users = await api.get('users');
 const newUser = await api.post('users', { name: 'John' });
@@ -196,13 +247,29 @@ const newUser = await api.post('users', { name: 'John' });
 
 #### `GraphQLClient(url, { query, variables, ...opts })`
 A client for making GraphQL requests.
+```js
+const query = `query { user(id: 1) { name } }`;
+yokto.GraphQLClient('/graphql', { query }).then(data => console.log(data));
+```
 
 #### `GraphQLAdapter(baseUrl, defaultOptions)`
 A factory for creating reusable `GraphQLClient` instances.
+```js
+const graph = yokto.GraphQLAdapter('/graphql');
+const { data } = await graph.query('{ user(id: 1) { name } }');
+console.log(data.user.name);
+```
 
 #### `WSClient(url, options)`
 A WebSocket client with auto-reconnection logic.
 - `options`: `{ onOpen, onClose, onMessage, onError, autoReconnect, ... }`.
+```js
+const ws = yokto.WSClient('ws://example.com', {
+    onMessage: (e) => console.log('Received:', e.data),
+    onReconnectFail: (err) => console.error('WS failed:', err)
+});
+ws.sendMessage('Hello from client');
+```
 
 ### Utilities
 
@@ -210,15 +277,35 @@ A WebSocket client with auto-reconnection logic.
 A simple and effective client-side hash router.
 - `$h`: Defines a route and its callback. A function passed as the first argument becomes the default/404 route.
 - `$a`: Programmatically navigates to a hash route.
+```js
+// Define routes
+yokto.$h('/home', () => console.log('Home page'));
+yokto.$h('/user/:id', ({ params }) => console.log(`User: ${params.id}`));
+yokto.$h(({ path }) => console.log(`404: ${path} not found`)); // Default
+
+// Navigate
+yokto.$a('/home');
+```
 
 #### `$s(query, styles, index)`
 A legacy utility to quickly set inline CSS styles. Prefer using `vNode._.css()` or `$c().css()`.
+```js
+yokto.$s('.item', { background: 'blue' }); // Styles all item classes
+yokto.$s('.item', 'color: green', 0); // Style only the first item
+```
 
 #### `Logger({ verbose, prefix, level })`
 A customizable logger for handling different log levels.
+```js
+const logger = yokto.Logger({ level: 'debug', prefix: 'MyApp' });
+logger.debug('This is a debug message.');
+```
 
 #### `clearCache()`
 Manually clears the LRU cache used by `$` and `$$` for DOM queries.
+```
+yokto.clearCache()
+```
 
 #### Miscellaneous Helpers
 - `__(obj)`: Returns `true` if the input is a non-array object.
@@ -258,6 +345,13 @@ You can configure `yokto.js` by modifying the `yokto.config` object.
 - **Security**: Avoid setting `verbose: true` in `RESTClient` or `WSClient` options in a production environment, as it can lead to leaking sensitive request/response data to the console.
 
 - **Error Handling**: Always wrap asynchronous operations like `RESTClient` and `GraphQLClient` in `try...catch` blocks to gracefully handle network failures or API errors.
+```js
+try {
+    await yokto.RESTClient('GET', '/api');
+} catch (err) {
+    console.error('API failed:', err);
+}
+```
 
 ## Another Awesome Example: Fetching and Rendering API Data
 
@@ -317,4 +411,3 @@ $$(() => { // Run when the DOM is ready
 
 - **Browser Compatibility**: `yokto.js` uses modern JavaScript (ES6+), including `Proxy` and `WeakMap`. It is not compatible with legacy browsers like IE11 without polyfills.
 - **Cache**: The selector cache is an LRU (Least Recently Used) cache. If you are creating many unique selectors dynamically, consider setting `useCache=false` to avoid churning the cache. The cache is automatically cleared on hash-based route changes.
-

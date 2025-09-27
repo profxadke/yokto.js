@@ -1,110 +1,24 @@
 /**
- * yokto.js - A micro DOM utility/minimal DOM/HTTP helper library + DOM updater
+ * yokto.js - A micro DOM utility/minimal DOM/HTTP helper library + vNode engine
  * --------------------------------------------
  * Provides ultra lightweight utilities for DOM selection, manipulation, element creation, traversal,
- * DOM ready callbacks, AJAX (fetch), and hash-based routing.
- *   - DOM selection: $
+ * DOM ready callbacks, AJAX (fetch), and hash-based routing, now powered by a reactive vNode engine.
+ *   - vNode/DOM selection: $, $$  ( or if func passed to $$ it'll run after DOMContentLoaded, see below; )
+ *   - vNode Chained: $c
+ *   - vNode creation: $v
+ *   - Mount vNode: _
  *   - Helpers: __, _$, Logger
- *   - Create element and append function: _
- *   - DOM ready: $$
- *   - DOM updater: $_
+ *   - DOM ready: $$ (as a DOM ready function)
  *   - HTTP Clients: RESTClient, GraphQLClient, RESTAdapter, GraphQLAdapter
  *   - WebSocket Client: WSClient
  *   - Inline style helper: $s
- *   - Chained DOM selector and updater: $c
- *   - Element creation: $t
- *   - Hash router: $h
- *
- * TODO: use vnode(t, a{}, c[])| t: tag<string>; attrs<object>; children<array>([string|vnode]) - for $t, _ and a func. to return vnode(s) from $
- *
- * ALIAS: $doc: document object, $win: window object, $loc: location, $dom: real dom
- *
- * API:
- *   __(obj) -> Checks if obj is an associative array (dict in Python)
- *
- *   _(parentSelector, tag, attrs, innerText) -> Creates and appends element on parent element selected via querySelector
- *
- *   $$(fn) -> Executes fn when DOM is ready
- *
- *   _$ -> Holds DOM Query Selection Cache
- *     - get: Get's DOM Element from (if in) Cache
- *     - set: Set to Cache a DOM element mapped with its querySelector
- *     - delete: Delete the Cached DOM element mapped to querySelector
- *     - clear: clear DOM element cache
- *
- *   $(selector, return_list, useCache, scope) -> Selects elements
- *     - returns single element if only one match or return_list == false
- *     - returns array of elements if multiple matches and return_list == true
- *     - useCache: if true, caches/reuses selection
- *     - scope: optional DOM element to scope query (defaults to document)
- *
- *   $_(query, options|string|array) -> Universal DOM updater
- *     - addClasses: string|array
- *     - removeClasses: string|array
- *     - toggleClasses: string|array
- *     - setAttrs: { key: value }
- *     - removeAttrs: string|array
- *     - index: number (optional, target only one element)
- *     - If `options` is a string or array, defaults to addClasses
- *
- *   $s(query, styles, index) -> Inline CSS/Style setter
- *
- *   $c(query, index) -> Chained version of $ and $_ combined
- *     - addClass, removeClass, toggleClass
- *     - attr: string|array|object  - if string/array it removes attrs, but key-value pair sets the attribute
- *     - css: string
- *     - html: string
- *     - text: string
- *     - on: event, function
- *     - off: event, function
- *     - prepend: child|node
- *     - append: child|node
- *     - each: function
- *     - map: function
- *     - filter: function
- *     - get: returns nodes
- *     - first: returns first node
- *     - refresh: refreshes dom element
- *
- *   $t(tag, attrs, innerText) -> Returns a DOM ready html-node object
- *     - tag: string ( name of tag, e.g., div, h1, etc. )
- *     - attrs: object ( key: value pair of attributes for the tag )
- *     - innerText: string ( optional, innerText if any for the tag )
- *
- *   $h(route, callback) -> Registers hash-based route with callback
- *     - route: string (e.g., '/path', '/user/:id') or callback for default route
- *     - callback: function({ path, params, query })
- *
- *   $a(route) -> Redirects / Teleports window.hash to provided route
- *     - route: string  (e.g., <button onclick="$a('anotherPage')">Next Page</button>)
- *
- *   RESTClient() -> HTTP REST Client
- *
- *   RESTAdapter(baseUrl, defaultOptions) -> HTTP REST Client Adapter for ease
- *     - baseUrl: string
- *     - defaultOptions: object default options like headers, timeout, etc. [see RESTClient]
- *     - returns: .get, .post, .put, .patch, .delete, and ._ for custom or manual HTTP method
- *
- *   GraphQLClient() -> GraphQL Client
- *
- *   GraphQLAdapter(baseUrl, defaultOptions) -> GraphQL Client Adpter
- *     - baseUrl: string
- *     - defaultOptions: object default options like headers (on GraphQLClient Object)
- *     - returns: client with .query, and .mutate
- *
- *   WSClient() -> WebSocket Client
- *
- *   clearCache() -> Clears cached DOM selections
- *
- *   config{} -> Configuration object { observeDOM: boolean, MAX_CACHE_SIZE: integer }
- *
- *   TAG: <script src="https://cdn.jsdelivr.net/gh/profxadke/yokto.js@main/yokto.min.js"></script>
+ *   - Hash router: $h, $a
  */
 
 // Configuration
 const yokto = {
     config: {
-        observeDOM: true, // Enable MutationObserver by default
+        observeDOM: true, // Enable MutationObserver for cache invalidation
         MAX_CACHE_SIZE: 100
     }
 };
@@ -115,7 +29,167 @@ const $win = window;
 const $loc = $doc.location;
 const n = ($win.requestAnimationFrame || (fn => setTimeout(fn, 16))).bind($win);
 
-// LRU Cache for $ selections (selector -> WeakRef(nodes array))
+// Helper for object check
+const __ = obj => obj !== null && typeof obj === 'object' && !Array.isArray(obj);
+
+/* ------------------------------------------------------------------
+ * vNode Engine Core
+ * ------------------------------------------------------------------ */
+
+// A cache to avoid re-wrapping the same element into a new vNode
+const vNodeCache = new WeakMap();
+
+const _toVNode = (elem) => {
+  if (vNodeCache.has(elem)) {
+    return vNodeCache.get(elem);
+  }
+
+  const tag = elem.tagName.toLowerCase();
+  let isUpdatingFromVNode = false;
+  const rawAttrs = {};
+
+  const attrsProxy = new Proxy(rawAttrs, {
+    set: (target, prop, value) => {
+      if (target[prop] === value) return true;
+      target[prop] = value;
+      isUpdatingFromVNode = true;
+      elem.setAttribute(prop, value);
+      Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+      return true;
+    },
+    deleteProperty: (target, prop) => {
+      if (!(prop in target)) return true;
+      delete target[prop];
+      isUpdatingFromVNode = true;
+      elem.removeAttribute(prop);
+      Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+      return true;
+    }
+  });
+
+  const vNode = {
+    tag,
+    attrs: attrsProxy,
+    get children() { return vNodeList(Array.from(elem.childNodes).map(node => {
+        if (node.nodeType === 1) return _toVNode(node);
+        if (node.nodeType === 3 && node.textContent.trim()) return node.textContent;
+        return null;
+      }).filter(Boolean));
+    },
+    $: {
+      node: elem,
+      get parent() { return elem.parentElement ? _toVNode(elem.parentElement) : null; },
+      get children() { return elem.children; },
+      get isConnected() { return elem.isConnected; }
+    },
+    _: {
+      append: (child) => {
+        isUpdatingFromVNode = true;
+        const childElem = child?.$?.node || document.createTextNode(child);
+        elem.append(childElem);
+        Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+        return vNode;
+      },
+      prepend: (child) => {
+        isUpdatingFromVNode = true;
+        const childElem = child?.$?.node || document.createTextNode(child);
+        elem.prepend(childElem);
+        Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+        return vNode;
+      },
+      remove: () => {
+        isUpdatingFromVNode = true;
+        elem.remove();
+        Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+      },
+      addClasses: (...names) => {
+        isUpdatingFromVNode = true;
+        elem.classList.add(...names);
+        Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+        return vNode;
+      },
+      removeClasses: (...names) => {
+        isUpdatingFromVNode = true;
+        elem.classList.remove(...names);
+        Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+        return vNode;
+      },
+      toggleClass: (name, force) => {
+        isUpdatingFromVNode = true;
+        elem.classList.toggle(name, force);
+        Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+        return vNode;
+      },
+      css: (styles) => {
+        isUpdatingFromVNode = true;
+        Object.assign(elem.style, styles);
+        Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+        return vNode;
+      },
+      on: (event, handler) => { elem.addEventListener(event, handler); return vNode; },
+      off: (event, handler) => { elem.removeEventListener(event, handler); return vNode; },
+    }
+  };
+
+  Object.defineProperty(vNode, 'text', {
+    get() { return elem.textContent; },
+    set(newValue) {
+      isUpdatingFromVNode = true;
+      elem.textContent = newValue;
+      Promise.resolve().then(() => { isUpdatingFromVNode = false; });
+    }
+  });
+
+  const observer = new MutationObserver((mutationsList) => {
+    if (isUpdatingFromVNode) return;
+    for (const mutation of mutationsList) {
+      if (mutation.type === 'attributes') {
+        const attrName = mutation.attributeName;
+        const newValue = elem.getAttribute(attrName);
+        if (newValue === null) {
+          if (rawAttrs[attrName] !== undefined) delete rawAttrs[attrName];
+        } else {
+          if (rawAttrs[attrName] !== newValue) rawAttrs[attrName] = newValue;
+        }
+      }
+    }
+  });
+
+  observer.observe(elem, { attributes: true, childList: true, subtree: true });
+
+  for (const attr of elem.attributes) {
+    rawAttrs[attr.name] = attr.value;
+  }
+
+  vNodeCache.set(elem, vNode);
+  return vNode;
+};
+
+const vNodeList = (nodes = []) => {
+  const list = [...nodes];
+  const methods = {
+    each: (callback) => { list.forEach(callback); return list; },
+    map: (callback) => vNodeList(list.map(callback)),
+    filter: (callback) => vNodeList(list.filter(callback)),
+    reduce: (callback, initial) => list.reduce(callback, initial),
+    on: (event, handler) => { list.each(v => v._.on(event, handler)); return list; },
+    off: (event, handler) => { list.each(v => v._.off(event, handler)); return list; },
+    addClasses: (...names) => { list.each(v => v._.addClasses(...names)); return list; },
+    removeClasses: (...names) => { list.each(v => v._.removeClasses(...names)); return list; },
+    toggleClass: (name, force) => { list.each(v => v._.toggleClass(name, force)); return list; },
+    css: (styles) => { list.each(v => v._.css(styles)); return list; },
+    remove: () => { list.each(v => v._.remove()); return list; },
+    first: () => list[0],
+    last: () => list[list.length - 1],
+  };
+  Object.setPrototypeOf(list, methods);
+  return list;
+};
+
+/* ------------------------------------------------------------------
+ * Caching and DOM Selection
+ * ------------------------------------------------------------------ */
+
 class LRUCache {
     constructor(max = 100) {
         this.max = max;
@@ -135,105 +209,204 @@ class LRUCache {
             this.cache.delete(this.cache.keys().next().value);
         }
     }
-    delete(key) {
-        this.cache.delete(key);
-    }
-    clear() {
-        this.cache.clear();
-    }
+    delete(key) { this.cache.delete(key); }
+    clear() { this.cache.clear(); }
 }
 const _$ = new LRUCache(yokto.config.MAX_CACHE_SIZE || 100);
 
-// Optional MutationObserver for cache invalidation
 const o = new MutationObserver(() => _$.clear());
 if (yokto.config.observeDOM && $doc && $doc.body) {
     o.observe($doc.body, { childList: true, subtree: true });
 }
 
 /**
- * Select elements from DOM.
- * @param {string} query - CSS selector string
- * @param {boolean} [return_list=false] - if true, return all matching elements as array
- * @param {boolean} [useCache=false] - if true, use/cache the selection for reuse
- * @param {Document|Element} [scope=document] - DOM element to scope query
- * @returns {Element|Element[]|null} - a single Element, array of Elements, or null if no matches
+ * Selects a single element from the DOM and returns a vNode.
+ * @param {string} selector - CSS selector string
+ * @param {boolean} [useCache=false] - If true, use/cache the selection for reuse
+ * @returns {vNode|null} - A single vNode or null if no match
  */
-const $ = (query, return_list = false, useCache = false, scope = $doc) => {
+const $ = (selector, useCache = false) => {
     if (useCache) {
-        const cachedRef = _$.get(query);
-        if (cachedRef) {
-            const cached = cachedRef.deref();
-            if (cached) {
-                if (cached.length === 1 && !return_list) {
-                    return cached[0];
-                }
-                return cached;
-            }
-            // Clean stale WeakRef
-            _$.delete(query);
+        const cached = _$.get(selector);
+        if (cached) return cached;
+    }
+    const elem = $doc.querySelector(selector);
+    if (!elem) return null;
+    const node = _toVNode(elem);
+    if (useCache) _$.set(selector, node);
+    return node;
+};
+
+/**
+ * Selects multiple elements and returns a vNodeList, OR acts as a DOM ready handler.
+ * @param {string|Function} selectorOrFn - CSS selector string OR a function to run on DOM ready
+ * @param {boolean} [useCache=false] - If true, use/cache the selection for reuse
+ * @returns {vNodeList|void} - A vNodeList or void if used as a DOM ready handler
+ */
+const $$ = (selectorOrFn, useCache = false) => {
+    // DOM ready functionality
+    if (typeof selectorOrFn === "function") {
+        if ($doc.readyState != "loading") {
+            selectorOrFn();
+        } else {
+            $doc.addEventListener("DOMContentLoaded", selectorOrFn, { once: true });
         }
+        return;
     }
-    let elems;
-    try {
-        elems = scope.querySelectorAll(query);
-    } catch (err) {
-        throw new Error(`Invalid CSS selector: ${query} or Scope: ${scope} doesn't contain querySelectorAll`);
-    }
-    if (elems.length === 0 && !return_list) {
-        return null; // Prevent undefined errors
-    }
-    const nodes = Array.from(elems).filter(el => el instanceof Element);
+
+    // Selector functionality
     if (useCache) {
-        _$.set(query, new WeakRef(nodes));
+        const cached = _$.get(selectorOrFn);
+        if (cached) return cached;
     }
-    if (elems.length === 1 && !return_list) {
-        return nodes[0];
-    }
+    const elems = $doc.querySelectorAll(selectorOrFn);
+    const nodes = vNodeList(Array.from(elems).map(elem => _toVNode(elem)));
+    if (useCache) _$.set(selectorOrFn, nodes);
     return nodes;
 };
 
 /**
- * Check if object is an associative Array (dict from py)
- * @param {any} obj
- * @returns {boolean} true if object is an associative array, object with key-value pair
+ * Creates a new vNode element.
+ * @param {string} tag - Tag name of the element
+ * @param {object} [attrs] - Attributes as a key-value pair
+ * @param {string|vNode|Array<string|vNode>} [children] - Child content
+ * @returns {vNode} - The new vNode
  */
-const __ = obj => {
-    return obj !== null && typeof obj === 'object' && !Array.isArray(obj);
+const $v = (tag, attrs, children) => {
+  const elem = document.createElement(tag);
+  if (__(attrs)) {
+    for (const key in attrs) {
+      elem.setAttribute(key, attrs[key]);
+    }
+  }
+  if (typeof children === 'string') {
+    elem.innerText = children;
+  } else if (Array.isArray(children)) {
+    children.forEach(child => elem.append(child?.$?.node || document.createTextNode(child)));
+  } else if (children) {
+    elem.append(children?.$?.node || document.createTextNode(children));
+  }
+  return _toVNode(elem);
 };
 
-// Shared helpers for DRY (used by $_ and $c)
-const addClassesToEl = (el, cls) => {
-    if (typeof cls !== 'string' && !Array.isArray(cls)) return;
-    const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-    n(() => el.classList.add(...clsArr));
+/**
+ * Mounts a vNode to a parent element in the DOM.
+ * @param {vNode} vNode - The vNode to mount
+ * @param {Element} parentElement - The DOM element/vNode to mount to
+ * @returns {vNode} - The mounted vNode
+ */
+const _ = (vNode, parentElement) => {
+  if ( '$' in parentElement ) {
+    parentElement = parentElement.$.node
+  }; parentElement.append(vNode.$.node);
+  return vNode;
 };
 
-const removeClassesFromEl = (el, cls) => {
-    if (typeof cls !== 'string' && !Array.isArray(cls)) return;
-    const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-    n(() => el.classList.remove(...clsArr));
+/* ------------------------------------------------------------------
+ * Chainable API
+ * ------------------------------------------------------------------ */
+const $c = (selector, index) => {
+    let nodes;
+    // Handle case where a vNode or vNodeList is passed directly
+    if (typeof selector === 'string') {
+        nodes = $$(selector);
+    } else if (Array.isArray(selector)) {
+        nodes = vNodeList(selector);
+    } else if (selector && selector.$) { // It's a single vNode
+        nodes = vNodeList([selector]);
+    } else {
+        nodes = vNodeList([]);
+    }
+
+    if (!nodes || !nodes.length) {
+        nodes = vNodeList([]); // Ensure nodes is always a vNodeList
+    }
+
+    if (typeof index === "number") {
+        nodes = (index >= 0 && index < nodes.length) ? vNodeList([nodes[index]]) : vNodeList([]);
+    }
+
+    const api = {
+        addClass: (...names) => {
+            nodes.addClasses(...names);
+            return api;
+        },
+        removeClass: (...names) => {
+            nodes.removeClasses(...names);
+            return api;
+        },
+        toggleClass: (name, force) => {
+            nodes.toggleClass(name, force);
+            return api;
+        },
+        attr: (key, val) => {
+            if (val === undefined && typeof key === 'string') {
+                return nodes.first()?.attrs[key]; // Getter
+            }
+            nodes.each(v => {
+                if (__(key)) {
+                    for (const k in key) { v.attrs[k] = key[k]; }
+                } else {
+                    v.attrs[key] = val;
+                }
+            });
+            return api;
+        },
+        css: (styles) => {
+            nodes.css(styles);
+            return api;
+        },
+        text: (content) => {
+            if (content === undefined) {
+                return nodes.reduce((acc, v) => acc + v.text, ""); // Getter
+            }
+            nodes.each(v => v.text = content); // Setter
+            return api;
+        },
+        on: (evt, fn) => {
+            nodes.on(evt, fn);
+            return api;
+        },
+        off: (evt, fn) => {
+            nodes.off(evt, fn);
+            return api;
+        },
+        append: (child) => {
+            const first = nodes.first();
+            if (first) first._.append(child);
+            return api;
+        },
+        prepend: (child) => {
+            const first = nodes.first();
+            if (first) first._.prepend(child);
+            return api;
+        },
+        remove: () => {
+            nodes.remove();
+            return api;
+        },
+        each: (fn) => {
+            nodes.each(fn);
+            return api;
+        },
+        map: (fn) => {
+            return $c(nodes.map(fn));
+        },
+        filter: (fn) => {
+            return $c(nodes.filter(fn));
+        },
+        get: (idx) => (idx === undefined) ? nodes : nodes[idx],
+        first: () => nodes.first(),
+        last: () => nodes.last(),
+        dom: () => nodes.map(v => v.$.node)
+    };
+
+    return api;
 };
 
-const toggleClassesOnEl = (el, cls) => {
-    if (typeof cls !== 'string' && !Array.isArray(cls)) return;
-    const clsArr = Array.isArray(cls) ? cls : String(cls).split(/\s+/).filter(Boolean);
-    n(() => clsArr.forEach(c => el.classList.toggle(c)));
-};
-
-const setAttrsOnEl = (el, attrs) => {
-    if (!__(attrs)) return;
-    n(() => {
-        for (const [k, v] of Object.entries(attrs)) {
-            el.setAttribute(k, v);
-        }
-    });
-};
-
-const removeAttrsFromEl = (el, attrs) => {
-    if (typeof attrs !== 'string' && !Array.isArray(attrs)) return;
-    const attrArr = Array.isArray(attrs) ? attrs : [attrs];
-    n(() => attrArr.forEach(attr => el.removeAttribute(attr)));
-};
+/* ------------------------------------------------------------------
+ * Preserved Utilities
+ * ------------------------------------------------------------------ */
 
 const setStylesOnEl = (el, styles) => {
     if (typeof styles === "string") {
@@ -251,131 +424,24 @@ const setStylesOnEl = (el, styles) => {
     }
 };
 
-
-/**
- * Create and returns a newly DOM-ready element
- * @param {string} tag - tag name of element/node to be returned
- * @param {object} [attrs] - attributs as key: value pair
- * @param {string} [innerText] - optional inner text content
- */
-const $t = ( tag, attrs, innerText ) => {
-    let elem = $doc.createElement(tag);
-    if (__(attrs)) {
-        for (let key in attrs) {
-            if (Object.prototype.hasOwnProperty.call(attrs, key)) {
-                elem.setAttribute(key, attrs[key]);
-            }
-        }
-    }
-    if (innerText != null) {
-        elem.innerText = String(innerText);
-    }; return elem
-}
-
-/**
- * Create and append a new element inside parent element.
- * @param {string} parentSelector - CSS selector of parent
- * @param {string} tag - tag name of element to create
- * @param {object} [attrs] - attributes as key:value
- * @param {any} [innerText] - optional inner text content (coerced to string)
- */
-const _ = (parentSelector, tag, attrs, innerText) => {
-    const parentElem = $(parentSelector);
-    if (!parentElem) {
-        throw new Error(`Parent Node/Element Doesn't Exist for selector: ${parentSelector}`);
-    }
-    const elem = $t(tag, attrs, innerText);
-    parentElem.appendChild(elem);
-};
-
-/**
- * Run a function when DOM is ready.
- * @param {Function} fn - function to execute
- */
-const $$ = (fn) => {
-    if (typeof fn !== "function") {
-        throw new Error("Argument passed to ready should be a function.");
-    }
-
-    if ($doc.readyState != "loading") {
-        fn();
-    } else if ($doc.addEventListener) {
-        $doc.addEventListener("DOMContentLoaded", fn, { once: true });
-    } else {
-        $doc.attachEvent("onreadystatechange", function () {
-            if ($doc.readyState != "loading") fn();
-        });
-    }
-};
-
-/**
- * Universal DOM element updater
- * @param {string} query - CSS selector
- * @param {object} options - {
- *   addClasses: string|array,
- *   removeClasses: string|array,
- *   toggleClasses: string|array,
- *   setAttrs: { key: value },
- *   removeAttrs: string|array,
- *   index?: number
- * }
- */
-const $_ = (query, options = {}) => {
-    // Shortcut: if string/array passed, assume addClasses
-    if (typeof options === "string" || Array.isArray(options)) {
-        options = { addClasses: options };
-    }
-
-    let nodes = $(query, true);
-    if (!nodes || !nodes.length) return;
-
-    if (!Array.isArray(nodes)) nodes = [nodes];
-    if (typeof options.index === "number") {
-        if (options.index < 0 || options.index >= nodes.length) {
-            throw new Error(`Invalid index ${options.index} for ${nodes.length} nodes`);
-        }
-        nodes = [nodes[options.index]].filter(Boolean);
-    }
-
-    nodes.forEach(el => {
-        if (!el) return;
-        if (options.addClasses) addClassesToEl(el, options.addClasses);
-        if (options.removeClasses) removeClassesFromEl(el, options.removeClasses);
-        if (options.toggleClasses) toggleClassesOnEl(el, options.toggleClasses);
-        if (options.setAttrs) setAttrsOnEl(el, options.setAttrs);
-        if (options.removeAttrs) removeAttrsFromEl(el, options.removeAttrs);
-    });
-};
-
-/**
- * Inline style setter
- * @param {string} query - CSS selector
- * @param {object|string} styles - object of {prop: value} OR string "prop: value"
- * @param {number} [index] - optional single element index
- */
 const $s = (query, styles, index) => {
-    let nodes = $(query, true);
+    const nodes = $$(query);
     if (!nodes || !nodes.length) return;
 
-    if (!Array.isArray(nodes)) nodes = [nodes];
+    let targetNodes = nodes;
     if (typeof index === "number") {
         if (index < 0 || index >= nodes.length) {
             throw new Error(`Invalid index ${index} for ${nodes.length} nodes`);
         }
-        nodes = [nodes[index]].filter(Boolean);
+        targetNodes = [nodes[index]].filter(Boolean);
     }
 
-    nodes.forEach(el => {
-        if (!el) return;
-        setStylesOnEl(el, styles);
+    targetNodes.forEach(vNode => {
+        if (!vNode) return;
+        setStylesOnEl(vNode.$.node, styles);
     });
 };
 
-/**
- * Logger
- * @param {object} [opts] - { verbose: boolean, prefix: string, level: string }
- * @returns {object} - { error, warn, info, debug }
- */
 const Logger = (opts = {}) => {
     const { verbose = false, prefix = "yokto", level = "info" } = opts;
     const levels = { error: 0, warn: 1, info: 2, debug: 3 };
@@ -396,13 +462,6 @@ const Logger = (opts = {}) => {
 
 const defaultLogger = Logger({ verbose: false, prefix: "yokto" });
 
-/**
- * REST API client
- * @param {string} method - HTTP method (GET, POST, PUT, DELETE)
- * @param {string} url - endpoint URL
- * @param {object} [options] - { data, params, headers, raw, retry, timeout, verbose, logger }
- * @returns {Promise<object|Response>} - JSON response, raw Response, or error
- */
 const RESTClient = async (method, url, options = {}) => {
     const {
         data, params, headers = {}, raw = false,
@@ -426,7 +485,6 @@ const RESTClient = async (method, url, options = {}) => {
             headers: { ...headers },
             body: data ? (() => {
                 try {
-                    // allow FormData/URLSearchParams passthrough
                     if (data instanceof FormData || data instanceof URLSearchParams) return data;
                     return JSON.stringify(data);
                 } catch (err) {
@@ -484,12 +542,6 @@ const RESTClient = async (method, url, options = {}) => {
     throw lastErr;
 };
 
-/**
- * GraphQL client
- * @param {string} url - GraphQL endpoint
- * @param {object} options - { query, variables, headers, ...rest }
- * @returns {Promise<object>} - parsed JSON response
- */
 const GraphQLClient = (url, { query, variables, ...opts }) => {
     if (!query) throw new Error("GraphQL query is required.");
     return RESTClient("POST", url, {
@@ -499,12 +551,6 @@ const GraphQLClient = (url, { query, variables, ...opts }) => {
     });
 };
 
-/**
- * RESTAdapter - returns a client bound to a base URL
- * @param {string} baseUrl - base URL for all requests
- * @param {object} [defaultOptions] - default options like headers, timeout, etc.
- * @returns {object} - client with .get, .post, .put, .patch, .delete, and ._ for custom HTTP or manual HTTP method invocation
- */
 const RESTAdapter = (baseUrl, defaultOptions = {}) => {
     const call = (method, endpoint = "", options = {}) => {
         const url = baseUrl.replace(/\/+$/, "") + "/" + endpoint.replace(/^\/+/, "");
@@ -521,12 +567,6 @@ const RESTAdapter = (baseUrl, defaultOptions = {}) => {
     };
 };
 
-/**
- * GraphQLAdapter - returns a client bound to a GraphQL endpoint
- * @param {string} baseUrl - GraphQL endpoint
- * @param {object} [defaultOptions] - default options like headers
- * @returns {object} - client with .query and .mutate
- */
 const GraphQLAdapter = (baseUrl, defaultOptions = {}) => {
     const call = (query, variables = {}, opts = {}) => {
         return GraphQLClient(baseUrl, { query, variables, ...defaultOptions, ...opts });
@@ -538,12 +578,6 @@ const GraphQLAdapter = (baseUrl, defaultOptions = {}) => {
     };
 };
 
-/**
- * WebSocket wrapper
- * @param {string} url - WebSocket server URL
- * @param {object} [options] - { onOpen, onClose, onMessage, onError, onReconnectFail, protocols, verbose, autoReconnect, reconnectRetries, reconnectDelay, connectTimeout }
- * @returns {WebSocket} - WebSocket instance with sendMessage and reconnect methods
- */
 const WSClient = (url, options = {}) => {
     const { onOpen, onClose, onMessage, onError, onReconnectFail, protocols, verbose = false, logger = defaultLogger,
             autoReconnect = true, reconnectRetries = 5, reconnectDelay = 1000, connectTimeout = 5000 } = options;
@@ -553,7 +587,7 @@ const WSClient = (url, options = {}) => {
     let retryCount = 0;
     let isClosedIntentionally = false;
 
-    const connect = () => {
+    const connect = async () => {
         ws = new WebSocket(url, protocols);
 
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timeout')), connectTimeout));
@@ -641,10 +675,6 @@ const WSClient = (url, options = {}) => {
     return ws;
 };
 
-/**
- * Direct DOM access (real DOM nodes, no virtual diffing)
- * - Example: $dom("#app").forEach(el => el.textContent = "Hello");
- */
 function $dom(selector, context = $doc) {
     if (typeof selector === "string") {
         return Array.from(context.querySelectorAll(selector));
@@ -656,156 +686,20 @@ function $dom(selector, context = $doc) {
     return [];
 }
 
-/* ---------- $c: Chainable DOM helper built on top of $ and $_ ---------- */
-const $c = (selector, index) => {
-    let nodes = $(selector, true);
-    if (!nodes || !nodes.length) nodes = [];
-    if (!Array.isArray(nodes)) nodes = [nodes];
-    if (typeof index === "number") {
-        if (index < 0 || index >= nodes.length) {
-            throw new Error(`Invalid index ${index} for ${nodes.length} nodes`);
-        }
-        nodes = [nodes[index]].filter(Boolean);
-    }
-
-    const invalidateCache = () => {
-        if (_$.cache && _$.cache.has && _$.cache.has(selector)) _$.delete(selector);
-    };
-
-    const api = {
-        addClass: cls => {
-            nodes.forEach(el => {
-                if (!el) return;
-                addClassesToEl(el, cls);
-            });
-            return api;
-        },
-        removeClass: cls => {
-            nodes.forEach(el => {
-                if (!el) return;
-                removeClassesFromEl(el, cls);
-            });
-            return api;
-        },
-        toggleClass: cls => {
-            nodes.forEach(el => {
-                if (!el) return;
-                toggleClassesOnEl(el, cls);
-            });
-            return api;
-        },
-        attr: (key, val) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                if (val === undefined) {
-                    removeAttrsFromEl(el, key);
-                } else {
-                    setAttrsOnEl(el, { [key]: val });
-                }
-            });
-            return api;
-        },
-        css: (styles) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                setStylesOnEl(el, styles);
-            });
-            return api;
-        },
-        html: (content) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                n(() => el.innerHTML = content);
-            });
-            invalidateCache();
-            return api;
-        },
-        text: (content) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                n(() => el.textContent = content);
-            });
-            invalidateCache();
-            return api;
-        },
-        on: (evt, fn) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                el.addEventListener(evt, fn);
-            });
-            return api;
-        },
-        off: (evt, fn) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                el.removeEventListener(evt, fn);
-            });
-            return api;
-        },
-        append: (child) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                n(() => el.append(child.cloneNode(true)));
-            });
-            invalidateCache();
-            return api;
-        },
-        prepend: (child) => {
-            nodes.forEach(el => {
-                if (!el) return;
-                n(() => el.prepend(child.cloneNode(true)));
-            });
-            invalidateCache();
-            return api;
-        },
-        each: (fn) => {
-            nodes.forEach((el, i) => {
-                if (!el) return;
-                fn(el, i);
-            });
-            return api;
-        },
-        map: (fn) => $c(nodes.map((el, i) => fn(el, i)).filter(Boolean)),
-        filter: (fn) => $c(nodes.filter((el, i) => fn(el, i))),
-        get: () => nodes,
-        first: () => nodes[0] || null,
-        refresh: () => {
-            nodes = $(selector, true);
-            if (!nodes || !nodes.length) nodes = [];
-            if (!Array.isArray(nodes)) nodes = [nodes];
-            if (typeof index === "number") {
-                if (index < 0 || index >= nodes.length) throw new Error(`Invalid index ${index}`);
-                nodes = [nodes[index]].filter(Boolean);
-            }
-            return api;
-        },
-        dom: () => { return nodes }
-    };
-    return api;
-};
-
-/**
- * Hash-based router
- * @param {string|Function} route - Route path (e.g., '/path', '/user/:id') or default callback
- * @param {Function} [callback] - Callback({ path, params, query }) for route match
- */
 const $h = (route, callback) => {
     const logger = yokto.defaultLogger || defaultLogger;
     const routes = $h.routes || ($h.routes = new Map());
     const log = (lvl, ...args) => logger[lvl](...args);
 
-    // Register default route if route is a function
     if (typeof route === 'function') {
         $h.defaultRoute = route;
         return;
     }
 
-    // Validate route and callback
     if (typeof route !== 'string' || typeof callback !== 'function') {
         throw new Error('Invalid route or callback');
     }
 
-    // Convert route to regex (e.g., '/user/:id' -> /^\/user\/([^\/]+)$/)
     const paramNames = [];
     const regexStr = route
         .replace(/\/:([^\/]+)/g, (_, name) => {
@@ -817,11 +711,9 @@ const $h = (route, callback) => {
         .replace(/\*/g, '.*');
     const regex = new RegExp(`^${regexStr}$`);
 
-    // Store route
     routes.set(route, { regex, callback, paramNames });
     log('info', `Registered route: ${route}`);
 
-    // Handle hash change
     const handleHash = () => {
         const hash = $loc.hash.replace(/^#/, '') || '/';
         const [path, queryStr] = hash.split('?');
@@ -859,7 +751,6 @@ const $h = (route, callback) => {
         }
     };
 
-    // Initialize if not already done
     if (!$h.initialized) {
         $win.addEventListener('hashchange', handleHash, { passive: true });
         $$(handleHash); // Run on DOM ready
@@ -868,10 +759,6 @@ const $h = (route, callback) => {
     }
 };
 
-/**
- * Hash-based location redirector, redirects to route (using client-only hash location)
- * @param string: route to redirect to
- */
 const $a = route => {
     const ec = '/'.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(`^[${ec}]+|[${ec}]+$`, 'g');
@@ -881,287 +768,16 @@ const $a = route => {
 }
 
 /* ------------------------------------------------------------------
- * Layout / App / Mount utilities (async-safe, per-layout preloaders)
- * ------------------------------------------------------------------ */
-
-/**
- * $layout - layout registry & helpers
- * Provides:
- *   - $layout.define(name, slots, options)
- *   - $layout.get(name)
- *   - $layout.render(name, target)
- *   - $layout.showPreloader(name, slot)
- *   - $layout.hidePreloader(name, slot)
- *
- * slots: { slotName: selectorString }
- * options: { preloaders: { slotName: preloader }, defaultPreloader: preloader }
- */
-const $layout = (() => {
-    const registry = Object.create(null);
-
-    // Ensure spinner CSS injected once
-    let _spinnerInjected = false;
-    const _ensureSpinnerStyle = () => {
-        if (_spinnerInjected) return;
-        _spinnerInjected = true;
-        try {
-            const css = `
-/* yokto default spinner */
-.yokto-spinner{display:inline-block;width:36px;height:36px;border:4px solid rgba(0,0,0,0.12);border-top-color:rgba(0,0,0,0.6);border-radius:50%;animation:yokto-spin .8s linear infinite}
-@keyframes yokto-spin{to{transform:rotate(360deg)}}
-.yokto-preloader{display:flex;align-items:center;justify-content:center;padding:8px}
-`;
-            const s = $doc.createElement('style');
-            s.setAttribute('data-yokto-spinner', 'true');
-            s.appendChild($doc.createTextNode(css));
-            $doc.head.appendChild(s);
-        } catch (e) {
-            defaultLogger.debug("spinner style injection failed", e);
-        }
-    };
-
-    const _createPreloaderNode = (pre) => {
-        if (!pre && pre !== '') return null;
-        if (typeof pre === 'function') return _createPreloaderNode(pre());
-        if (pre instanceof HTMLElement) return pre.cloneNode(true);
-        if (typeof pre === 'string') {
-            const frag = $doc.createRange().createContextualFragment(pre);
-            const wrapper = $doc.createElement('div');
-            wrapper.className = 'yokto-preloader';
-            wrapper.appendChild(frag);
-            return wrapper;
-        }
-        return null;
-    };
-
-    const _resolveSingle = (selectorOrElement) => {
-        if (!selectorOrElement) return null;
-        if (selectorOrElement instanceof Element) return selectorOrElement;
-        try {
-            return $doc.querySelector(selectorOrElement);
-        } catch (e) {
-            // fallback: try $ helper
-            try {
-                const r = $(selectorOrElement);
-                if (!r) return null;
-                if (Array.isArray(r)) return r[0];
-                return r;
-            } catch (e2) {
-                return null;
-            }
-        }
-    };
-
-    function define(name, slots = {}, options = {}) {
-        if (!name || typeof name !== 'string') throw new Error("$layout.define: name required");
-        if (registry[name]) {
-            defaultLogger.warn(`$layout.define: layout '${name}' already defined, overwriting`);
-        }
-        registry[name] = {
-            name,
-            slots: { ...slots },
-            options: { ...(options || {}) },
-            nodes: {}
-        };
-        return registry[name];
-    }
-
-    function get(name) {
-        return registry[name] || null;
-    }
-
-    async function render(name, target = '#app') {
-        const layout = registry[name];
-        if (!layout) throw new Error(`$layout.render: layout '${name}' not found`);
-        _ensureSpinnerStyle();
-
-        const host = _resolveSingle(target);
-        if (!host) throw new Error(`$layout.render: target '${target}' not found in DOM`);
-
-        for (const [slot, sel] of Object.entries(layout.slots)) {
-            let node = null;
-            try {
-                node = host.querySelector(sel);
-            } catch (e) {
-                node = _resolveSingle(sel);
-            }
-            if (!node) {
-                node = $doc.createElement('div');
-                node.setAttribute('data-slot', slot);
-                host.appendChild(node);
-                defaultLogger.debug(`$layout.render: created placeholder for slot '${slot}' in host`);
-            }
-            layout.nodes[slot] = node;
-
-            const preCfg = (layout.options && layout.options.preloaders && layout.options.preloaders[slot]) || layout.options?.defaultPreloader || null;
-            if (preCfg) {
-                const preNode = _createPreloaderNode(preCfg) || _createPreloaderNode('<div class="yokto-spinner" aria-hidden="true"></div>');
-                if (preNode) {
-                    node.innerHTML = '';
-                    node.appendChild(preNode);
-                }
-            }
-        }
-        return layout;
-    }
-
-    function showPreloader(name, slot) {
-        const layout = registry[name];
-        if (!layout) throw new Error(`$layout.showPreloader: layout '${name}' not found`);
-        const node = layout.nodes[slot];
-        if (!node) throw new Error(`$layout.showPreloader: slot '${slot}' not found in layout '${name}'`);
-        const preCfg = layout.options?.preloaders?.[slot] || layout.options?.defaultPreloader || '<div class="yokto-spinner" aria-hidden="true"></div>';
-        const preNode = _createPreloaderNode(preCfg) || _createPreloaderNode('<div class="yokto-spinner" aria-hidden="true"></div>');
-        node.innerHTML = '';
-        if (preNode) node.appendChild(preNode);
-    }
-
-    function hidePreloader(name, slot) {
-        const layout = registry[name];
-        if (!layout) throw new Error(`$layout.hidePreloader: layout '${name}' not found`);
-        const node = layout.nodes[slot];
-        if (!node) return;
-        node.innerHTML = '';
-    }
-
-    return {
-        define,
-        get,
-        render,
-        showPreloader,
-        hidePreloader,
-        _registry: registry
-    };
-})();
-
-/**
- * App manager
- * - $app.init({ layout, target, state })
- * - $app.useLayout(name, target)
- * - $app.getLayout()
- * - $app.state (getter)
- */
-const $app = (() => {
-    let _state = {};
-    let _currentLayoutName = null;
-    let _currentLayout = null;
-
-    return {
-        async init(opts = {}) {
-            const { layout, target = '#app', state = {} } = opts;
-            _state = Object.assign({}, state);
-            if (layout) {
-                _currentLayoutName = layout;
-                _currentLayout = await $layout.render(layout, target);
-            }
-            return this;
-        },
-        async useLayout(name, target = '#app') {
-            _currentLayoutName = name;
-            _currentLayout = await $layout.render(name, target);
-            return _currentLayout;
-        },
-        getLayout() {
-            return _currentLayout;
-        },
-        get state() {
-            return _state;
-        },
-        setState(s = {}) {
-            Object.assign(_state, s);
-        },
-        _currentLayoutName: () => _currentLayoutName
-    };
-})();
-
-/**
- * $mount(layoutName, slotName, content, options)
- *
- * content: string | HTMLElement | DocumentFragment | Array<string|Node> | Promise<...>
- * options: { clear: boolean (default true), replace: boolean (default false) }
- *
- * Async-safe: if content is a Promise, it shows per-slot preloader while awaiting.
- * Returns inserted node or slot node.
- */
-const $mount = async (layoutName, slotName, content, options = {}) => {
-    const layout = $layout.get(layoutName);
-    if (!layout) throw new Error(`$mount: layout '${layoutName}' not registered`);
-    const slotNode = layout.nodes[slotName] || null;
-    if (!slotNode) throw new Error(`$mount: slot '${slotName}' not found in layout '${layoutName}'`);
-
-    const { clear = true, replace = false } = options;
-
-    let resolved = content;
-    if (resolved && typeof resolved.then === 'function') {
-        try {
-            $layout.showPreloader(layoutName, slotName);
-        } catch (e) {
-            defaultLogger.debug("$mount: showPreloader failed", e);
-        }
-        try {
-            resolved = await resolved;
-        } finally {
-            try { $layout.hidePreloader(layoutName, slotName); } catch (e) { defaultLogger.debug("$mount: hidePreloader failed", e); }
-        }
-    }
-
-    let nodeToInsert = null;
-    if (resolved == null) {
-        return slotNode;
-    } else if (typeof resolved === 'string') {
-        const frag = $doc.createRange().createContextualFragment(resolved);
-        nodeToInsert = frag;
-    } else if (resolved instanceof DocumentFragment) {
-        nodeToInsert = resolved;
-    } else if (resolved instanceof HTMLElement || resolved instanceof Node) {
-        nodeToInsert = resolved;
-    } else if (Array.isArray(resolved)) {
-        const frag = $doc.createDocumentFragment();
-        for (const item of resolved) {
-            if (typeof item === 'string') {
-                frag.appendChild($doc.createRange().createContextualFragment(item));
-            } else if (item instanceof Node) {
-                frag.appendChild(item);
-            }
-        }
-        nodeToInsert = frag;
-    } else {
-        throw new Error("$mount: invalid content type (must be string|Node|Fragment|Promise|Array)");
-    }
-
-    if (clear) slotNode.innerHTML = '';
-
-    if (replace) {
-        if (nodeToInsert instanceof DocumentFragment) {
-            const parent = slotNode.parentNode;
-            parent.insertBefore(nodeToInsert, slotNode);
-            parent.removeChild(slotNode);
-        } else if (nodeToInsert instanceof Node) {
-            slotNode.replaceWith(nodeToInsert);
-            layout.nodes[slotName] = nodeToInsert;
-        } else {
-            slotNode.appendChild(nodeToInsert);
-        }
-        return layout.nodes[slotName];
-    } else {
-        if (nodeToInsert instanceof DocumentFragment) slotNode.appendChild(nodeToInsert);
-        else slotNode.appendChild(nodeToInsert);
-        return slotNode;
-    }
-};
-
-/* ------------------------------------------------------------------
  * Exports: attach to yokto and window in a controlled, valid way
  * ------------------------------------------------------------------ */
 yokto.$ = $;
 yokto.$$ = $$;
 yokto.__ = __;
 yokto._$ = _$;
+yokto.$v = $v;
 yokto._ = _;
-yokto.$_ = $_;
-yokto.$s = $s;
 yokto.$c = $c;
-yokto.$t = $t;
+yokto.$s = $s;
 yokto.$h = $h;
 yokto.$dom = $dom;
 yokto.$doc = $doc;
@@ -1177,25 +793,17 @@ yokto.WSClient = WSClient;
 yokto.Logger = Logger;
 yokto.defaultLogger = defaultLogger;
 
-yokto.$layout = $layout;
-yokto.$app = $app;
-yokto.$mount = $mount;
-
 yokto.clearCache = () => _$.clear();
 
 if (typeof $win !== "undefined") {
     $win.yokto = yokto;
     // also expose common helpers to window for convenience
     $win.$ = $;
-    $win._ = _;  // TODO: Actually expose all helpers to window
-    $win.$_ = $_;
+    $win._ = _;
     $win.$$ = $$;
-    $win.$s = $s;
+    $win.$v = $v;
     $win.$c = $c;
-    $win.$t = $t;
+    $win.$s = $s;
     $win.$h = $h;
     $win.$a = $a;
-    $win.$layout = $layout;
-    $win.$app = $app;
-    $win.$mount = $mount;
 }

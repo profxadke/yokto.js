@@ -1,6 +1,9 @@
 # yokto.js
 
 **yokto.js** is a micro JavaScript library centered around a reactive virtual DOM (vNode) engine. It provides a suite of lightweight tools for modern web development, including efficient DOM selection and manipulation, element creation, chainable APIs, HTTP clients for REST and GraphQL, WebSocket management, and client-side hash-based routing. It's designed for building dynamic applications with a minimal footprint and a clean, expressive API.
+<!--
+yokto.js is a micro JavaScript library with a reactive virtual DOM (vNode) engine. It provides a suite of lightweight tools for modern web development, including efficient DOM manipulation, chainable APIs, HTTP clients (REST/GraphQL), WebSockets, and client-side routing—all designed for a minimal footprint and a clean, expressive API.
+-->
 
 ## Installation
 
@@ -52,7 +55,7 @@ The `$` property provides direct access to the underlying DOM element and its na
 
 ### `vNode._` - Manipulation Methods
 
-The `_` property is an object containing methods for direct, chainable DOM manipulation.
+The `_` property is an object containing methods for direct, chainable (using trailing `_`) DOM manipulation.
 
 - `_.addClasses(...names)`: Adds one or more CSS classes.
 - `_.removeClasses(...names)`: Removes one or more CSS classes.
@@ -66,8 +69,8 @@ The `_` property is an object containing methods for direct, chainable DOM manip
 
 ```js
 const box = yokto.$('.box');
-box._.addClasses('visible')
-     .css({ backgroundColor: 'blue', color: 'white' })
+box._.addClasses('visible')._
+     .css({ backgroundColor: 'blue', color: 'white' })._
      .on('click', () => alert('Box clicked!'));
 ```
 
@@ -128,7 +131,7 @@ const addButton = $('#add-btn');
 const list = $('#todo-list');
 
 const addTask = () => {
-  const taskText = input.text.trim();
+  const taskText = input.$.node.value.trim();
   if (!taskText) return; // Ignore empty input
 
   // 1. Create a "delete" button vNode
@@ -147,7 +150,7 @@ const addTask = () => {
   _(newTask, list);
 
   // 5. Clear the input field
-  input.text = '';
+  input.$.node.value = '';
 };
 
 // Add task when the button is clicked or Enter is pressed

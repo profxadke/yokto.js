@@ -414,3 +414,121 @@ $$(() => { // Run when the DOM is ready
 
 - **Browser Compatibility**: `yokto.js` uses modern JavaScript (ES6+), including `Proxy` and `WeakMap`. It is not compatible with legacy browsers like IE11 without polyfills.
 - **Cache**: The selector cache is an LRU (Least Recently Used) cache. If you are creating many unique selectors dynamically, consider setting `useCache=false` to avoid churning the cache. The cache is automatically cleared on hash-based route changes.
+
+### Example(s)
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Yokto.js - Layout / Mount Example</title>
+  <!-- optional tiny page styling for clarity -->
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 0; padding: 0; }
+    #app { display: grid; grid-template-rows: auto 1fr auto; min-height: 100vh; gap: 8px; }
+    #header { background:#0b74da; color: #fff; padding: 12px; }
+    #body { padding: 16px; background: #f7f8fa; }
+    #footer { background:#222; color:#eee; padding: 8px; font-size: 0.9rem; }
+    .nav a { color: #fff; margin-right: 10px; text-decoration: none; }
+    .yokto-preloader { display:flex; align-items:center; justify-content:center; padding:12px; }
+    .yokto-spinner { display:inline-block; width:28px; height:28px; border:3px solid rgba(0,0,0,0.12); border-top-color:rgba(0,0,0,0.6); border-radius:50%; animation:yokto-spin .8s linear infinite; }
+    @keyframes yokto-spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <!-- include your yokto library -->
+  <!-- <script src="yokto.js"></script> -->
+  <script src="https://cdn.jsdelivr.net/gh/profxadke/yokto.js@dev/yokto.min.js"></script>
+  <!-- include app's js (demo here) -->
+  <!-- <script src="demo.js"></script> -->
+  <script>
+    // The new yokto.js is a vNode-based DOM utility.
+// This example demonstrates creating and mounting vNodes with $v and _ (while also containing the power the manipulate DOM-in-ease!)
+(() => {
+  // Mounting the layout first.
+  _( $v('div', {id: 'app'}, [
+    $v('div', {id: 'header'}),
+    $v('div', {id: 'body'}),
+    $v('div', {id: 'footer'})
+  ]), document.body);
+  // Mount header by creating vNodes.
+  const headerSlot = $('#header');
+  _( $v('div', { style: 'display:flex;align-items:center;justify-content:space-between' }, [
+      $v('div', {}, [ $v('strong', {}, 'Yokto Demo') ]),
+      $v('nav', { class: 'nav' }, [
+        $v('a', { href: '#/home' }, 'Home'),
+        $v('a', { href: '#/about' }, 'About')
+      ])
+    ]), headerSlot);
+  // Put a persistent footer (static) once by creating and mounting a vNode.
+  const footerSlot = $('#footer');
+  _( $v('div', {}, '© 2025 — Yokto Demo'), footerSlot );
+
+  // Define a vNode for the main preloader to be reused.
+  const mainPreloader = $v('div', { class: 'yokto-preloader' }, [
+    $v('div', { class: 'yokto-spinner', 'aria-hidden': 'true' }),
+    $v('span', { style: 'margin-left:8px' }, 'Loading content…')
+  ]);
+
+  // Create two UI routes via $h.
+  $h('/home', ({ path, params, query }) => {
+    // Mount main content asynchronously using vNodes.
+    const mainSlot = $('#body');
+    mainSlot.text = ''; // Clear slot
+    _(mainPreloader, mainSlot); // Mount preloader
+
+    const promise = new Promise((resolve) => {
+      setTimeout(() => {
+        resolve([
+          $v('h1', {}, 'Home'),
+          $v('p', {}, `Welcome to the Yokto demo. Content loaded at ${new Date().toLocaleTimeString()}.`),
+          $v('p', {}, [
+            'This update replaced only the ',
+            $v('code', {}, '#body'),
+            ' slot — the rest of the DOM was unchanged.'
+          ])
+        ]);
+      }, 800);
+    });
+
+    promise.then(contentVNodes => {
+      mainSlot.text = ''; // Clear preloader
+      contentVNodes.forEach(vnode => _(vnode, mainSlot));
+    });
+  });
+
+  $h('/about', ({ path }) => {
+    // Mount main content asynchronously
+    const mainSlot = $('#body');
+    mainSlot.text = ''; // Clear slot
+    _(mainPreloader, mainSlot); // Mount preloader
+
+    const promise = new Promise((resolve) => {
+      setTimeout(() => {
+        resolve([
+          $v('h1', {}, 'About'),
+          $v('p', {}, 'Yokto is tiny, synchronous-first, and supports async mounting of slot content.')
+        ]);
+      }, 450);
+    });
+
+    promise.then(contentVNodes => {
+      mainSlot.text = ''; // Clear preloader
+      contentVNodes.forEach(vnode => _(vnode, mainSlot));
+    });
+  });
+
+  // default route: go to #/home if none present
+  $h('/', () => {
+    $a('/home');
+  });
+
+  // If there's already a hash, the router will trigger on DOM-ready.
+  // If not, trigger default route.
+  if (!location.hash) $a('/home');
+})();
+  </script>
+</body>
+</html>
+```

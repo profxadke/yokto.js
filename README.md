@@ -415,6 +415,8 @@ $$(() => { // Run when the DOM is ready
 - **Browser Compatibility**: `yokto.js` uses modern JavaScript (ES6+), including `Proxy` and `WeakMap`. It is not compatible with legacy browsers like IE11 without polyfills.
 - **Cache**: The selector cache is an LRU (Least Recently Used) cache. If you are creating many unique selectors dynamically, consider setting `useCache=false` to avoid churning the cache. The cache is automatically cleared on hash-based route changes.
 
+---
+
 ### Example(s)
 
 ```html
